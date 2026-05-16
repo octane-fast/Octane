@@ -335,7 +335,7 @@ contract OctUSD implements IOCS01 {
 
     let new_reserve = self.total_reserve - amount
     if (self.total_supply > 0) {
-      let reserve_usd = (new_reserve * self.oct_usd_price) / 100000000
+      let reserve_usd = (new_reserve * self.oct_usd_price) / 1000000
       require(reserve_usd * 100 >= self.collateral_ratio * self.total_supply, "would violate collateral ratio")
     }
 
@@ -371,14 +371,14 @@ contract OctUSD implements IOCS01 {
     require(value > 0, "no OCT sent")
     let fee = (value * self.mint_fee_bps) / 10000
     let net_value = value - fee
-    let mint_amount = (net_value * self.oct_usd_price) / 100000000
+    let mint_amount = (net_value * self.oct_usd_price) / 1000000
     require(mint_amount > 0, "mint amount too small")
 
     let new_reserve = self.total_reserve + net_value
     let new_supply = self.total_supply + mint_amount
 
     // Safety: block if system would become undercollateralized
-    let reserve_usd = (new_reserve * self.oct_usd_price) / 100000000
+    let reserve_usd = (new_reserve * self.oct_usd_price) / 1000000
     require(reserve_usd * 100 >= self.collateral_ratio * new_supply, "insufficient collateral ratio")
 
     self.total_reserve = new_reserve
@@ -398,8 +398,8 @@ contract OctUSD implements IOCS01 {
     require(self.balances[caller] >= amount, "insufficient balance")
     require(epoch >= self.last_mint_time[caller] + self.min_hold_time, "hold time not met")
 
-    // oct_to_return = (amount * 10^8) / oct_usd_price
-    let oct_gross = (amount * 100000000) / self.oct_usd_price
+    // oct_to_return = (amount * 10^6) / oct_usd_price
+    let oct_gross = (amount * 1000000) / self.oct_usd_price
     let fee = (oct_gross * self.redeem_fee_bps) / 10000
     let oct_to_return = oct_gross - fee
     require(oct_to_return > 0, "redeem amount too small")
@@ -487,7 +487,7 @@ contract OctUSD implements IOCS01 {
     if (self.total_supply == 0) {
       return 0
     }
-    let reserve_usd = (self.total_reserve * self.oct_usd_price) / 100000000
+    let reserve_usd = (self.total_reserve * self.oct_usd_price) / 1000000
     return (reserve_usd * 1000000) / self.total_supply
   }
 }

@@ -2,7 +2,7 @@
 
 Algorithmic stablecoin on [Octra](https://octra.org), backed by over-collateralized OCT reserves with TEE-verified oracle price feeds.
 
-**Token address:** `octHFLx2Zp9SG3gPw98xy7cpQwEqcDUk5LHdQhEEyktgF3M`
+**Token address:** `oct2hJMZbBdAAKTBXK61vs1TUx8oQNZVZyEpR4SXGFXgtvE`
 
 The octUSD stablecoin enables DeFi on Octra. The token is algorithmic; it is backed by OCT, the native token of the Octra network. A user can obtain octUSD by depositing OCT, and are issued an octUSD amount that corresponds to the value of that OCT they deposit. In order to price OCT, a TEE-based oracle runs and provides price updates for the OCT token. This TEE uses an ed25519 signing key that is never exposed to the outside world, and can be operated by anyone. Feel free to run the TEE oracle yourself and start issuing price updates to octUSD: you can do so by following the `Running the Oracle` section. 
 
@@ -11,6 +11,24 @@ The Docker Image used to generate the TEE binary can be viewed here: https://git
 Currently, OCT reserves must exceed the value of all octUSD by 1.5x. If that ratio is violated, minting new USD is disabled until the reserves are replenished. As the ecosystem matures, different wrapped tokens representing forms of collateral, including Bitcoin, Ethereum, Gold, or US Treasuries, may be incorporated into the token's reserves.
 
 This token is experimental and has not been audited. Review the program code, and use at your own risk.
+
+## Quick Start
+
+For now, the easiest way to interact with octUSD is to make API calls to the Octra WebCLI. The WebCLI can be downlaoded [here](https://github.com/octra-labs/octra-webcli). Once it is running: 
+
+**Mint octUSD (deposits 1 OCT):**
+```bash
+curl -s http://127.0.0.1:8420/api/contract/call \
+  -H 'Content-Type: application/json' \
+  -d '{"address":"oct2hJMZbBdAAKTBXK61vs1TUx8oQNZVZyEpR4SXGFXgtvE","method":"mint","params":[],"ou":"1000","amount":"1000000"}'
+```
+
+**Redeem 1 octUSD for OCT:**
+```bash
+curl -s http://127.0.0.1:8420/api/contract/call \
+  -H 'Content-Type: application/json' \
+  -d '{"address":"oct2hJMZbBdAAKTBXK61vs1TUx8oQNZVZyEpR4SXGFXgtvE","method":"redeem","params":[1],"ou":"1000","amount":"0"}'
+```
 
 ## Architecture
 
@@ -170,21 +188,21 @@ The relay fetches signed attestations from the oracle and submits price updates 
 # One-shot: fetch and submit one price update
 ORACLE_URL="http://<ORACLE_IP>:8080" \
 ORACLE_SPEC_FILE="oracle/spec.json" \
-OCTUSD_CONTRACT="octHFLx2Zp9SG3gPw98xy7cpQwEqcDUk5LHdQhEEyktgF3M" \
+OCTUSD_CONTRACT="oct2hJMZbBdAAKTBXK61vs1TUx8oQNZVZyEpR4SXGFXgtvE" \
 python3 scripts/relay.py
 
 # Loop mode: poll every 2 minutes
 RELAY_LOOP=1 RELAY_INTERVAL=120 \
 ORACLE_URL="http://<ORACLE_IP>:8080" \
 ORACLE_SPEC_FILE="oracle/spec.json" \
-OCTUSD_CONTRACT="octHFLx2Zp9SG3gPw98xy7cpQwEqcDUk5LHdQhEEyktgF3M" \
+OCTUSD_CONTRACT="oct2hJMZbBdAAKTBXK61vs1TUx8oQNZVZyEpR4SXGFXgtvE" \
 python3 scripts/relay.py
 
 # Dry run: print what would be submitted
 RELAY_DRY_RUN=1 \
 ORACLE_URL="http://<ORACLE_IP>:8080" \
 ORACLE_SPEC_FILE="oracle/spec.json" \
-OCTUSD_CONTRACT="octHFLx2Zp9SG3gPw98xy7cpQwEqcDUk5LHdQhEEyktgF3M" \
+OCTUSD_CONTRACT="oct2hJMZbBdAAKTBXK61vs1TUx8oQNZVZyEpR4SXGFXgtvE" \
 python3 scripts/relay.py
 ```
 
