@@ -58,6 +58,9 @@ struct QueryRequest {
     aggregation: String,  // "median" or "mode"
     #[serde(default = "default_domain")]
     domain: String,
+    /// If set, multiply the aggregated value by this factor and truncate to integer
+    /// before signing. This ensures the signed value matches the on-chain integer format.
+    scale: Option<u64>,
 }
 
 #[derive(serde::Deserialize)]
@@ -227,12 +230,24 @@ fn fetch_and_sign(ctx: &OracleCtx, req: QueryRequest) -> Result<Outcome, String>
 
     let sources_total = spec.sources.len();
     let sources_used = values.len();
-    let value = aggregate(&mut values, agg);
+    let raw_value = aggregate(&mut values, agg);
+
+    // Apply scale factor: multiply and truncate to integer for on-chain compatibility
+    let value = match req.scale {
+        Some(s) => (raw_value * s as f64).trunc(),
+        None => raw_value,
+    };
 
     let timestamp = now_unix();
 
     // Sign: "{domain}:{spec_hash}:{value}:{timestamp}"
-    let message = format!("{}:{}:{}:{}", req.domain, spec_hash, value, timestamp);
+    // When scaled, value is an integer (e.g. 41499) matching the contract's to_string()
+    let value_str = if req.scale.is_some() {
+        format!("{}", value as u64)
+    } else {
+        format!("{}", value)
+    };
+    let message = format!("{}:{}:{}:{}", req.domain, spec_hash, value_str, timestamp);
     let signature = ctx.signing_key.sign(message.as_bytes());
     let sig_b64 = BASE64.encode(signature.to_bytes());
 
@@ -449,6 +464,7 @@ mod tests {
             }],
             aggregation: "median".into(),
             domain: "test-domain".into(),
+            scale: None,
         };
 
         let result = fetch_and_sign(&ctx, req).unwrap();
@@ -495,6 +511,7 @@ mod tests {
             ],
             aggregation: "median".into(),
             domain: "test".into(),
+            scale: None,
         };
 
         let result = fetch_and_sign(&ctx, req).unwrap();
@@ -516,6 +533,7 @@ mod tests {
             }],
             aggregation: "invalid".into(),
             domain: "x".into(),
+            scale: None,
         };
 
         let result = fetch_and_sign(&ctx, req);
@@ -534,6 +552,7 @@ mod tests {
             }],
             aggregation: "median".into(),
             domain: "x".into(),
+            scale: None,
         };
 
         let result = fetch_and_sign(&ctx, req);

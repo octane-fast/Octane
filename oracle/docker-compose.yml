@@ -1,6 +1,6 @@
 services:
   oracle:
-    image: ghcr.io/${GITHUB_REPO:-octra}/octusd-oracle:latest
+    image: ghcr.io/octane-defi/octusd-oracle:sha-2fed481
     network_mode: host
     restart: unless-stopped
     environment:

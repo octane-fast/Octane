@@ -27,8 +27,10 @@ import json
 import os
 import sys
 import time
+import http.client
 import urllib.request
 import urllib.error
+from urllib.parse import urlparse
 
 
 ORACLE_URL = os.environ.get("ORACLE_URL", "http://localhost:8080")
@@ -48,24 +50,35 @@ def load_spec():
 
 def fetch_attestation(spec):
     """POST the query spec to the oracle and return the attestation."""
+    import socket
     body = json.dumps(spec).encode()
-    req = urllib.request.Request(
-        f"{ORACLE_URL}/latest",
-        data=body,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        return json.loads(resp.read())
-
-
-def scale_price(value):
-    """
-    Convert oracle's raw float value to contract int format.
-    Contract expects: USD per 1 whole OCT * 10^6.
-    Oracle returns: USD per 1 whole OCT as float (e.g. 0.0042).
-    """
-    return int(value * 1_000_000)
+    parsed = urlparse(ORACLE_URL)
+    host = parsed.hostname
+    port = parsed.port or 80
+    raw = (
+        f"POST /latest HTTP/1.1\r\n"
+        f"Host: {host}:{port}\r\n"
+        f"Content-Type: application/json\r\n"
+        f"Content-Length: {len(body)}\r\n"
+        f"Connection: close\r\n"
+        f"\r\n"
+    ).encode() + body
+    sock = socket.create_connection((host, port), timeout=30)
+    sock.sendall(raw)
+    resp = b""
+    while True:
+        chunk = sock.recv(65536)
+        if not chunk:
+            break
+        resp += chunk
+    sock.close()
+    parts = resp.split(b"\r\n\r\n", 1)
+    if len(parts) < 2:
+        raise Exception(f"malformed response: {resp[:200].decode()}")
+    status_line = parts[0].split(b"\r\n")[0].decode()
+    if "200" not in status_line:
+        raise Exception(f"oracle returned {status_line}: {parts[1].decode()}")
+    return json.loads(parts[1])
 
 
 def submit_price_update(price_int, timestamp, signature):
@@ -74,7 +87,7 @@ def submit_price_update(price_int, timestamp, signature):
         "address": CONTRACT,
         "method": "update_octra_price",
         "params": [price_int, timestamp, signature],
-        "ou": "200000",
+        "ou": "1000",
         "amount": "0",
     }
     body = json.dumps(payload).encode()
@@ -91,7 +104,7 @@ def submit_price_update(price_int, timestamp, signature):
 def relay_once(spec):
     att = fetch_attestation(spec)
 
-    price_int = scale_price(att["value"])
+    price_int = int(att["value"])
     timestamp = att["timestamp"]
     signature = att["signature"]
 

@@ -12,10 +12,12 @@ SEED = os.environ.get("OCTRA_SEED", "")
 PIN = os.environ.get("OCTRA_PIN", "")
 RPC_URL = os.environ.get("OCTRA_RPC_URL", "http://46.101.86.250:8080")
 
-ORACLE_PUBKEY = "5egzVAmCibqiul2WLfxQSuTiM3o4rdxyCLngk3DMc2g="  # base64 (Octra uses b64 for ed25519)
+ORACLE_PUBKEY = "n7WUCMVsgO0/Fkn9Xmpovq7h584ghlWjDpUxkopQdtQ="  # base64 (Octra uses b64 for ed25519)
 ORACLE_DOMAIN = "octusd-price-v1"
-ORACLE_SPEC_HASH = ""  # will be computed from the oracle's /spec endpoint or hardcoded after first deploy
-INITIAL_PRICE = 40151  # ~$0.0402
+ORACLE_SPEC_HASH = "29c6e50f3ad93d4856571c1e1b5cc066c4ac775bf587781f9909c4fc7f6ff163"
+ORACLE_SPEC_FILE = os.path.join(os.path.dirname(__file__), "..", "oracle", "spec.json")
+INITIAL_PRICE = 41437  # ~$0.0414
+CONTRACT_SOURCE = os.path.join(os.path.dirname(__file__), "..", "contracts", "main.aml")
 
 def api(method, path, **kwargs):
     fn = getattr(requests, method)
@@ -83,7 +85,7 @@ def main():
         sys.exit(1)
 
     # 4. Read source and prepare for single-file compile
-    with open("main.aml") as f:
+    with open(CONTRACT_SOURCE) as f:
         src = f.read()
     # Strip import and implements for single-file compile
     src = src.replace('import IOCS01 from "interfaces/IOCS01.aml"\n\n', '')
@@ -108,7 +110,9 @@ def main():
     print(f"Predicted contract address: {addr_result.get('address')}")
 
     # 7. Deploy with constructor params
-    params = json.dumps([ORACLE_PUBKEY, ORACLE_DOMAIN, ORACLE_SPEC_HASH, INITIAL_PRICE])
+    with open(ORACLE_SPEC_FILE) as f:
+        spec_json = f.read().strip()
+    params = json.dumps([ORACLE_PUBKEY, ORACLE_DOMAIN, ORACLE_SPEC_HASH, spec_json, INITIAL_PRICE])
     print(f"Deploying with params: {params}")
 
     # Get recommended fee
