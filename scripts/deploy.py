@@ -12,7 +12,7 @@ SEED = os.environ.get("OCTRA_SEED", "")
 PIN = os.environ.get("OCTRA_PIN", "")
 RPC_URL = os.environ.get("OCTRA_RPC_URL", "http://46.101.86.250:8080")
 
-ORACLE_PUBKEY = "n7WUCMVsgO0/Fkn9Xmpovq7h584ghlWjDpUxkopQdtQ="  # base64 (Octra uses b64 for ed25519)
+ORACLE_PUBKEY = "CHkfB7TkASlpfzvSdNArXbaxm2Z/uOXahrDhenL7rz4="  # base64 (Octra uses b64 for ed25519)
 ORACLE_DOMAIN = "octusd-price-v1"
 ORACLE_SPEC_HASH = "29c6e50f3ad93d4856571c1e1b5cc066c4ac775bf587781f9909c4fc7f6ff163"
 ORACLE_SPEC_FILE = os.path.join(os.path.dirname(__file__), "..", "oracle", "spec.json")
