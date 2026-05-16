@@ -1,4 +1,4 @@
-FROM rust:1.87-alpine AS builder
+FROM rust:1-alpine AS builder
 WORKDIR /usr/src/app
 RUN apk add musl-dev pkgconfig
 COPY Cargo.toml Cargo.lock ./
