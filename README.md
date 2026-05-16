@@ -6,6 +6,8 @@ Algorithmic stablecoin on [Octra](https://octra.org), backed by over-collaterali
 
 The octUSD stablecoin enables DeFi on Octra. The token is algorithmic; it is backed by OCT, the native token of the Octra network. A user can obtain octUSD by depositing OCT, and are issued an octUSD amount that corresponds to the value of that OCT they deposit. In order to price OCT, a TEE-based oracle runs and provides price updates for the OCT token. This TEE uses an ed25519 signing key that is never exposed to the outside world, and can be operated by anyone. Feel free to run the TEE oracle yourself and start issuing price updates to octUSD: you can do so by following the `Running the Oracle` section. 
 
+The Docker Image used to generate the TEE binary can be viewed here: https://github.com/octane-defi/octUSD/actions/runs/25967564381/attempts/1#summary-76333668042. The Docker Image, and subsequently the enclave binary, serves as the derivation path for the oracle signing key. Learn more about this process here: https://docs.marlin.org/oyster/build-cvm/tutorials/persistent-keys
+
 Currently, OCT reserves must exceed the value of all octUSD by 1.5x. If that ratio is violated, minting new USD is disabled until the reserves are replenished. As the ecosystem matures, different wrapped tokens representing forms of collateral, including Bitcoin, Ethereum, Gold, or US Treasuries, may be incorporated into the token's reserves.
 
 This token is experimental and has not been audited. Review the program code, and use at your own risk.
