@@ -1,0 +1,493 @@
+import IOCS01 from "interfaces/IOCS01.aml"
+
+contract OctUSD implements IOCS01 {
+  state {
+    owner: address
+    oracle_pk: string
+    oracle_domain: string
+    oracle_spec_hash: string
+    oct_usd_price: int
+    last_price_timestamp: int
+    collateral_ratio: int
+    mint_fee_bps: int
+    redeem_fee_bps: int
+    min_hold_time: int
+    total_supply: int
+    total_reserve: int
+    fee_reserve: int
+    balances: map[address]int
+    last_mint_time: map[address]int
+    grants: map[address]map[address]int
+    name: string
+    symbol: string
+    decimals: int
+
+    // Timelock state
+    timelock_delay: int
+    pending_owner: address
+    pending_owner_ready: int
+    pending_oracle_pk: string
+    pending_oracle_ready: int
+    pending_spec_domain: string
+    pending_spec_hash: string
+    pending_spec: string
+    pending_spec_ready: int
+    pending_collateral_ratio: int
+    pending_collateral_ready: int
+    pending_mint_fee_bps: int
+    pending_redeem_fee_bps: int
+    pending_fee_ready: int
+    pending_hold_time: int
+    pending_hold_time_ready: int
+    transmitter_whitelist_enabled: int
+    transmitter_whitelist: map[address]int
+  }
+
+  event Transfer(from: address, to: address, amount: int)
+  event Approval(owner_addr: address, spender: address, amount: int)
+  event Mint(to: address, oct_deposited: int, usd_minted: int)
+  event Redeem(from: address, oct_withdrawn: int, usd_burned: int)
+  event PriceUpdated(new_price: int, updated_by: address)
+  event OracleSpecUpdated(domain: string, spec_hash: string, spec: string)
+  event OracleChangeProposed(new_pk: string, execute_after: int)
+  event OracleChangeExecuted(new_pk: string)
+  event OracleChangeCancelled()
+  event SpecChangeProposed(domain: string, spec_hash: string, execute_after: int)
+  event SpecChangeExecuted(domain: string, spec_hash: string)
+  event SpecChangeCancelled()
+  event CollateralRatioChangeProposed(new_ratio: int, execute_after: int)
+  event CollateralRatioChangeExecuted(new_ratio: int)
+  event CollateralRatioChangeCancelled()
+  event OwnerChangeProposed(new_owner: address, execute_after: int)
+  event OwnerChangeExecuted(new_owner: address)
+  event OwnerChangeCancelled()
+  event FeeChangeProposed(mint_fee_bps: int, redeem_fee_bps: int, execute_after: int)
+  event FeeChangeExecuted(mint_fee_bps: int, redeem_fee_bps: int)
+  event FeeChangeCancelled()
+  event HoldTimeChangeProposed(new_hold_time: int, execute_after: int)
+  event HoldTimeChangeExecuted(new_hold_time: int)
+  event HoldTimeChangeCancelled()
+  event TransmitterAdded(addr: address)
+  event TransmitterRemoved(addr: address)
+  event TransmitterWhitelistToggled(enabled: int)
+  event ReserveWithdrawn(to: address, amount: int)
+  event ReserveDeposited(from: address, amount: int)
+
+  constructor(oracle_pubkey: string, domain: string, spec_hash: string, spec: string, initial_price: int) {
+    self.owner = caller
+    self.oracle_pk = oracle_pubkey
+    self.oracle_domain = domain
+    self.oracle_spec_hash = spec_hash
+    self.oct_usd_price = initial_price
+    self.last_price_timestamp = 0
+    self.collateral_ratio = 4
+    self.mint_fee_bps = 0
+    self.redeem_fee_bps = 0
+    self.min_hold_time = 0
+    self.total_supply = 0
+    self.total_reserve = 0
+    self.fee_reserve = 0
+    self.name = "Octra USD"
+    self.symbol = "octUSD"
+    self.decimals = 6
+    self.timelock_delay = 86400
+    self.pending_owner_ready = 0
+    self.pending_oracle_ready = 0
+    self.pending_spec_ready = 0
+    self.pending_collateral_ready = 0
+    self.pending_fee_ready = 0
+    self.pending_hold_time_ready = 0
+    self.transmitter_whitelist_enabled = 0
+  }
+
+  // --- Oracle ---
+
+  // Update price with an Ed25519-signed attestation.
+  // The oracle signs: "{domain}:{spec_hash}:{value}:{timestamp}"
+  // where spec_hash = hex(sha256(canonical(sources, aggregation)))
+  fn update_octra_price(new_price: int, price_timestamp: int, sig: string): bool {
+    if (self.transmitter_whitelist_enabled == 1) {
+      require(self.transmitter_whitelist[caller] == 1, "caller not whitelisted")
+    }
+    require(new_price > 0, "invalid price")
+    require(price_timestamp > self.last_price_timestamp, "stale price timestamp")
+
+    let msg = concat(self.oracle_domain, concat(":", concat(self.oracle_spec_hash, concat(":", concat(to_string(new_price), concat(":", to_string(price_timestamp)))))))
+    let ok = ed25519_ok(self.oracle_pk, msg, sig)
+    require(ok, "invalid oracle signature")
+
+    self.oct_usd_price = new_price
+    self.last_price_timestamp = price_timestamp
+    emit PriceUpdated(new_price, caller)
+    return true
+  }
+
+  // --- Admin: Transmitter Whitelist ---
+
+  fn set_transmitter_whitelist_enabled(enabled: int): bool {
+    require(caller == self.owner, "only owner")
+    require(enabled == 0 || enabled == 1, "must be 0 or 1")
+    self.transmitter_whitelist_enabled = enabled
+    emit TransmitterWhitelistToggled(enabled)
+    return true
+  }
+
+  fn add_transmitter(addr: address): bool {
+    require(caller == self.owner, "only owner")
+    self.transmitter_whitelist[addr] = 1
+    emit TransmitterAdded(addr)
+    return true
+  }
+
+  fn remove_transmitter(addr: address): bool {
+    require(caller == self.owner, "only owner")
+    self.transmitter_whitelist[addr] = 0
+    emit TransmitterRemoved(addr)
+    return true
+  }
+
+  // --- Timelocked Admin: Oracle Key ---
+
+  fn propose_set_oracle(new_oracle_pk: string): bool {
+    require(caller == self.owner, "only owner")
+    self.pending_oracle_pk = new_oracle_pk
+    self.pending_oracle_ready = epoch + self.timelock_delay
+    emit OracleChangeProposed(new_oracle_pk, self.pending_oracle_ready)
+    return true
+  }
+
+  fn execute_set_oracle(): bool {
+    require(caller == self.owner, "only owner")
+    require(self.pending_oracle_ready > 0, "no pending change")
+    require(epoch >= self.pending_oracle_ready, "timelock not expired")
+    self.oracle_pk = self.pending_oracle_pk
+    self.pending_oracle_ready = 0
+    emit OracleChangeExecuted(self.oracle_pk)
+    return true
+  }
+
+  fn cancel_set_oracle(): bool {
+    require(caller == self.owner, "only owner")
+    require(self.pending_oracle_ready > 0, "no pending change")
+    self.pending_oracle_ready = 0
+    emit OracleChangeCancelled()
+    return true
+  }
+
+  // --- Timelocked Admin: Oracle Spec ---
+
+  fn propose_set_oracle_spec(domain: string, spec_hash: string, spec: string): bool {
+    require(caller == self.owner, "only owner")
+    self.pending_spec_domain = domain
+    self.pending_spec_hash = spec_hash
+    self.pending_spec = spec
+    self.pending_spec_ready = epoch + self.timelock_delay
+    emit SpecChangeProposed(domain, spec_hash, self.pending_spec_ready)
+    return true
+  }
+
+  fn execute_set_oracle_spec(): bool {
+    require(caller == self.owner, "only owner")
+    require(self.pending_spec_ready > 0, "no pending change")
+    require(epoch >= self.pending_spec_ready, "timelock not expired")
+    self.oracle_domain = self.pending_spec_domain
+    self.oracle_spec_hash = self.pending_spec_hash
+    self.pending_spec_ready = 0
+    emit OracleSpecUpdated(self.oracle_domain, self.oracle_spec_hash, self.pending_spec)
+    return true
+  }
+
+  fn cancel_set_oracle_spec(): bool {
+    require(caller == self.owner, "only owner")
+    require(self.pending_spec_ready > 0, "no pending change")
+    self.pending_spec_ready = 0
+    emit SpecChangeCancelled()
+    return true
+  }
+
+  // --- Timelocked Admin: Collateral Ratio ---
+
+  fn propose_set_collateral_ratio(new_ratio: int): bool {
+    require(caller == self.owner, "only owner")
+    require(new_ratio >= 1, "ratio must be >= 1")
+    self.pending_collateral_ratio = new_ratio
+    self.pending_collateral_ready = epoch + self.timelock_delay
+    emit CollateralRatioChangeProposed(new_ratio, self.pending_collateral_ready)
+    return true
+  }
+
+  fn execute_set_collateral_ratio(): bool {
+    require(caller == self.owner, "only owner")
+    require(self.pending_collateral_ready > 0, "no pending change")
+    require(epoch >= self.pending_collateral_ready, "timelock not expired")
+    self.collateral_ratio = self.pending_collateral_ratio
+    self.pending_collateral_ready = 0
+    emit CollateralRatioChangeExecuted(self.collateral_ratio)
+    return true
+  }
+
+  fn cancel_set_collateral_ratio(): bool {
+    require(caller == self.owner, "only owner")
+    require(self.pending_collateral_ready > 0, "no pending change")
+    self.pending_collateral_ready = 0
+    emit CollateralRatioChangeCancelled()
+    return true
+  }
+
+  // --- Timelocked Admin: Ownership Transfer ---
+
+  fn propose_transfer_ownership(new_owner: address): bool {
+    require(caller == self.owner, "only owner")
+    self.pending_owner = new_owner
+    self.pending_owner_ready = epoch + self.timelock_delay
+    emit OwnerChangeProposed(new_owner, self.pending_owner_ready)
+    return true
+  }
+
+  fn execute_transfer_ownership(): bool {
+    require(caller == self.owner, "only owner")
+    require(self.pending_owner_ready > 0, "no pending change")
+    require(epoch >= self.pending_owner_ready, "timelock not expired")
+    self.owner = self.pending_owner
+    self.pending_owner_ready = 0
+    emit OwnerChangeExecuted(self.owner)
+    return true
+  }
+
+  fn cancel_transfer_ownership(): bool {
+    require(caller == self.owner, "only owner")
+    require(self.pending_owner_ready > 0, "no pending change")
+    self.pending_owner_ready = 0
+    emit OwnerChangeCancelled()
+    return true
+  }
+
+  // --- Timelocked Admin: Fees ---
+
+  fn propose_set_fees(new_mint_fee_bps: int, new_redeem_fee_bps: int): bool {
+    require(caller == self.owner, "only owner")
+    require(new_mint_fee_bps >= 0, "fee must be >= 0")
+    require(new_redeem_fee_bps >= 0, "fee must be >= 0")
+    require(new_mint_fee_bps <= 1000, "fee must be <= 10%")
+    require(new_redeem_fee_bps <= 1000, "fee must be <= 10%")
+    self.pending_mint_fee_bps = new_mint_fee_bps
+    self.pending_redeem_fee_bps = new_redeem_fee_bps
+    self.pending_fee_ready = epoch + self.timelock_delay
+    emit FeeChangeProposed(new_mint_fee_bps, new_redeem_fee_bps, self.pending_fee_ready)
+    return true
+  }
+
+  fn execute_set_fees(): bool {
+    require(caller == self.owner, "only owner")
+    require(self.pending_fee_ready > 0, "no pending change")
+    require(epoch >= self.pending_fee_ready, "timelock not expired")
+    self.mint_fee_bps = self.pending_mint_fee_bps
+    self.redeem_fee_bps = self.pending_redeem_fee_bps
+    self.pending_fee_ready = 0
+    emit FeeChangeExecuted(self.mint_fee_bps, self.redeem_fee_bps)
+    return true
+  }
+
+  fn cancel_set_fees(): bool {
+    require(caller == self.owner, "only owner")
+    require(self.pending_fee_ready > 0, "no pending change")
+    self.pending_fee_ready = 0
+    emit FeeChangeCancelled()
+    return true
+  }
+
+  // --- Timelocked Admin: Hold Time ---
+
+  fn propose_set_hold_time(new_hold_time: int): bool {
+    require(caller == self.owner, "only owner")
+    require(new_hold_time >= 0, "hold time must be >= 0")
+    self.pending_hold_time = new_hold_time
+    self.pending_hold_time_ready = epoch + self.timelock_delay
+    emit HoldTimeChangeProposed(new_hold_time, self.pending_hold_time_ready)
+    return true
+  }
+
+  fn execute_set_hold_time(): bool {
+    require(caller == self.owner, "only owner")
+    require(self.pending_hold_time_ready > 0, "no pending change")
+    require(epoch >= self.pending_hold_time_ready, "timelock not expired")
+    self.min_hold_time = self.pending_hold_time
+    self.pending_hold_time_ready = 0
+    emit HoldTimeChangeExecuted(self.min_hold_time)
+    return true
+  }
+
+  fn cancel_set_hold_time(): bool {
+    require(caller == self.owner, "only owner")
+    require(self.pending_hold_time_ready > 0, "no pending change")
+    self.pending_hold_time_ready = 0
+    emit HoldTimeChangeCancelled()
+    return true
+  }
+
+  // --- Mint / Redeem ---
+
+  // Owner can withdraw OCT from reserves as long as collateral ratio remains valid.
+  fn withdraw_reserve(to: address, amount: int): bool {
+    require(caller == self.owner, "only owner")
+    require(amount > 0, "zero amount")
+    require(self.total_reserve >= amount, "exceeds reserve")
+
+    let new_reserve = self.total_reserve - amount
+    if (self.total_supply > 0) {
+      let reserve_usd = (new_reserve * self.oct_usd_price) / 100000000
+      require(reserve_usd >= self.collateral_ratio * self.total_supply, "would violate collateral ratio")
+    }
+
+    self.total_reserve = new_reserve
+    transfer(to, amount)
+    emit ReserveWithdrawn(to, amount)
+    return true
+  }
+
+  // Owner can withdraw accumulated fees.
+  fn withdraw_fees(to: address, amount: int): bool {
+    require(caller == self.owner, "only owner")
+    require(amount > 0, "zero amount")
+    require(self.fee_reserve >= amount, "exceeds fee reserve")
+    self.fee_reserve = self.fee_reserve - amount
+    transfer(to, amount)
+    emit ReserveWithdrawn(to, amount)
+    return true
+  }
+
+  // Deposit OCT to increase reserves without minting octUSD.
+  fn deposit_reserve(): bool {
+    require(value > 0, "no OCT sent")
+    self.total_reserve = self.total_reserve + value
+    emit ReserveDeposited(caller, value)
+    return true
+  }
+
+  // Mint octUSD by sending OCT with the call.
+  // User receives the full USD value of deposited OCT as octUSD.
+  // Minting is blocked if it would violate the system collateral ratio.
+  fn mint(): bool {
+    require(value > 0, "no OCT sent")
+    let fee = (value * self.mint_fee_bps) / 10000
+    let net_value = value - fee
+    let mint_amount = (net_value * self.oct_usd_price) / 100000000
+    require(mint_amount > 0, "mint amount too small")
+
+    let new_reserve = self.total_reserve + net_value
+    let new_supply = self.total_supply + mint_amount
+
+    // Safety: block if system would become undercollateralized
+    let reserve_usd = (new_reserve * self.oct_usd_price) / 100000000
+    require(reserve_usd >= self.collateral_ratio * new_supply, "insufficient collateral ratio")
+
+    self.total_reserve = new_reserve
+    self.total_supply = new_supply
+    self.fee_reserve = self.fee_reserve + fee
+    self.balances[caller] = self.balances[caller] + mint_amount
+    self.last_mint_time[caller] = epoch
+    emit Mint(caller, value, mint_amount)
+    emit Transfer(self_addr, caller, mint_amount)
+    return true
+  }
+
+  // Redeem octUSD for OCT at the current oracle price.
+  // Enforces minimum hold time and deducts redeem fee.
+  fn redeem(amount: int): bool {
+    require(amount > 0, "zero amount")
+    require(self.balances[caller] >= amount, "insufficient balance")
+    require(epoch >= self.last_mint_time[caller] + self.min_hold_time, "hold time not met")
+
+    // oct_to_return = (amount * 10^8) / oct_usd_price
+    let oct_gross = (amount * 100000000) / self.oct_usd_price
+    let fee = (oct_gross * self.redeem_fee_bps) / 10000
+    let oct_to_return = oct_gross - fee
+    require(oct_to_return > 0, "redeem amount too small")
+    require(self.total_reserve >= oct_to_return, "insufficient reserve")
+
+    self.balances[caller] = self.balances[caller] - amount
+    self.total_supply = self.total_supply - amount
+    self.total_reserve = self.total_reserve - oct_to_return
+    self.fee_reserve = self.fee_reserve + fee
+
+    transfer(caller, oct_to_return)
+    emit Redeem(caller, oct_to_return, amount)
+    emit Transfer(caller, self_addr, amount)
+    return true
+  }
+
+  // --- OCS-01 Token Standard ---
+
+  fn transfer(to: address, amount: int): bool {
+    let bal = self.balances[caller]
+    require(bal >= amount, "insufficient balance")
+    require(epoch >= self.last_mint_time[caller] + self.min_hold_time, "hold time not met")
+    self.balances[caller] = bal - amount
+    self.balances[to] = self.balances[to] + amount
+    emit Transfer(caller, to, amount)
+    return true
+  }
+
+  fn grant(spender: address, amount: int): bool {
+    self.grants[caller][spender] = amount
+    emit Approval(caller, spender, amount)
+    return true
+  }
+
+  fn pull(from: address, to: address, amount: int): bool {
+    let allowed = self.grants[from][caller]
+    require(allowed >= amount, "allowance exceeded")
+    let bal = self.balances[from]
+    require(bal >= amount, "insufficient balance")
+    require(epoch >= self.last_mint_time[from] + self.min_hold_time, "hold time not met")
+    self.grants[from][caller] = allowed - amount
+    self.balances[from] = bal - amount
+    self.balances[to] = self.balances[to] + amount
+    emit Transfer(from, to, amount)
+    return true
+  }
+
+  // --- View Functions ---
+
+  view fn balance_of(addr: address): int {
+    return self.balances[addr]
+  }
+
+  view fn allowance(owner_addr: address, spender: address): int {
+    return self.grants[owner_addr][spender]
+  }
+
+  view fn get_name(): string {
+    return self.name
+  }
+
+  view fn get_symbol(): string {
+    return self.symbol
+  }
+
+  view fn get_total_supply(): int {
+    return self.total_supply
+  }
+
+  view fn get_decimals(): int {
+    return self.decimals
+  }
+
+  view fn get_octra_price(): int {
+    return self.oct_usd_price
+  }
+
+  view fn get_reserve(): int {
+    return self.total_reserve
+  }
+
+  // Returns the current collateral ratio scaled by 10^6.
+  // A value of 4000000 means exactly 4x collateralization.
+  view fn get_collateral_ratio(): int {
+    if (self.total_supply == 0) {
+      return 0
+    }
+    let reserve_usd = (self.total_reserve * self.oct_usd_price) / 100000000
+    return (reserve_usd * 1000000) / self.total_supply
+  }
+}
