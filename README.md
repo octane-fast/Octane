@@ -2,21 +2,32 @@
 
 Algorithmic stablecoin on [Octra](https://octra.org), backed by over-collateralized OCT reserves with TEE-verified oracle price feeds.
 
-**Token address:** `octBmhcDw4Z8mALn7d7GdW8941FfTpqVGBBv1GDBbu4aAbj`
+**Token address:** `octHFLx2Zp9SG3gPw98xy7cpQwEqcDUk5LHdQhEEyktgF3M`
+
+The octUSD stablecoin enables DeFi on Octra. The token is algorithmic; it is backed by OCT, the native token of the Octra network. A user can obtain octUSD by depositing OCT, and are issued an octUSD amount that corresponds to the value of that OCT they deposit. In order to price OCT, a TEE-based oracle runs and provides price updates for the OCT token. This TEE uses an ed25519 signing key that is never exposed to the outside world, and can be operated by anyone. Feel free to run the TEE oracle yourself and start issuing price updates to octUSD: you can do so by following the `Running the Oracle` section. 
+
+Currently, OCT reserves must exceed the value of all octUSD by 1.5x. If that ratio is violated, minting new USD is disabled until the reserves are replenished. As the ecosystem matures, different wrapped tokens representing forms of collateral, including Bitcoin, Ethereum, Gold, or US Treasuries, may be incorporated into the token's reserves.
+
+This token is experimental and has not been audited. Review the program code, and use at your own risk.
 
 ## Architecture
 
 ```
-┌──────────────┐    POST /latest    ┌──────────────────┐   update_octra_price   ┌─────────────┐
-│  Price Relay │ ─────────────────► │  TEE Oracle      │                        │  OctUSD     │
-│  (scripts/)  │ ◄──────────────── │  (Oyster CVM)    │                        │  Contract   │
-│              │  signed attestation│  ed25519 signing │                        │  (Octra)    │
-│              │ ──────────────────────────────────────────────────────────────► │             │
-└──────────────┘       webcli TX submission                                     └─────────────┘
+┌────────────────┐         ┌──────────────────┐         ┌─────────────────┐
+│  Data Sources  │         │  TEE Oracle      │         │  OctUSD         │
+│                │◄────────┤                  │         │  Contract       │
+│                │  fetch  │                  │         │                 │
+└────────────────┘         └────────┬─────────┘         └─────────▲───────┘
+                                    │ signed price update         │
+                                    │                             │
+                           ┌────────▼─────────┐                   │
+                           │  Price Relay     │                   │ update_octra_price
+                           │                  ├───────────────────┘
+                           └──────────────────┘
 ```
 
-- **Contract** — AML smart contract implementing the OCS-01 token standard. Mints octUSD when users deposit OCT, redeems OCT when users burn octUSD. All admin operations are timelocked (24h).
-- **Oracle** — Rust binary running inside a Marlin Oyster CVM TEE enclave. Fetches prices from 3 independent sources, computes the median, and signs the result with a KMS-derived ed25519 key.
+- **Contract** — AML smart contract implementing the OCS-01 token standard. Mints octUSD when users deposit OCT, redeems OCT when users burn octUSD. All admin operations are timelocked (1hr).
+- **Oracle** — Rust binary running inside a Marlin Oyster CVM TEE. Fetches prices from 3 independent sources, computes the median, and signs the result with a KMS-derived ed25519 key.
 - **Relay** — Python script that queries the oracle, receives a signed attestation, and submits the price update transaction to the contract via the Octra webcli.
 
 ## Oracle Spec
@@ -45,9 +56,9 @@ The oracle fetches OCT/USD prices from 3 sources and takes the median:
 }
 ```
 
-The `scale` factor (10^6) converts the raw float price to an integer for on-chain use. For example, $0.0415 becomes `41500`.
-
 **Spec hash:** `29c6e50f3ad93d4856571c1e1b5cc066c4ac775bf587781f9909c4fc7f6ff163`
+
+This hash is used within the octUSD token contract. It is a hash of the above plaintext configuration, and ensures that only this configuration is used when querying the TEE-based oracle for price data. I.e., an adversary cannot query alternative datasources to create a fraudulent price update.
 
 ## Contract Features
 
@@ -85,10 +96,8 @@ PORT=8080 cargo run
 ### Deploy to Oyster CVM (production)
 
 ```bash
-# Build and push Docker image
-docker build -t ghcr.io/octane-defi/octusd-oracle:latest ./oracle
-docker push ghcr.io/octane-defi/octusd-oracle:latest
-
+# Build and push Docker image (CI does this automatically on push)
+# Image tags use the git SHA, e.g. ghcr.io/octane-defi/octusd-oracle:sha-4882472
 # Update docker-compose.yml with the new image tag, then:
 oyster-cvm deploy \
   --docker-compose ./oracle/docker-compose.yml \
@@ -159,21 +168,21 @@ The relay fetches signed attestations from the oracle and submits price updates 
 # One-shot: fetch and submit one price update
 ORACLE_URL="http://<ORACLE_IP>:8080" \
 ORACLE_SPEC_FILE="oracle/spec.json" \
-OCTUSD_CONTRACT="octBmhcDw4Z8mALn7d7GdW8941FfTpqVGBBv1GDBbu4aAbj" \
+OCTUSD_CONTRACT="octHFLx2Zp9SG3gPw98xy7cpQwEqcDUk5LHdQhEEyktgF3M" \
 python3 scripts/relay.py
 
 # Loop mode: poll every 2 minutes
 RELAY_LOOP=1 RELAY_INTERVAL=120 \
 ORACLE_URL="http://<ORACLE_IP>:8080" \
 ORACLE_SPEC_FILE="oracle/spec.json" \
-OCTUSD_CONTRACT="octBmhcDw4Z8mALn7d7GdW8941FfTpqVGBBv1GDBbu4aAbj" \
+OCTUSD_CONTRACT="octHFLx2Zp9SG3gPw98xy7cpQwEqcDUk5LHdQhEEyktgF3M" \
 python3 scripts/relay.py
 
 # Dry run: print what would be submitted
 RELAY_DRY_RUN=1 \
 ORACLE_URL="http://<ORACLE_IP>:8080" \
 ORACLE_SPEC_FILE="oracle/spec.json" \
-OCTUSD_CONTRACT="octBmhcDw4Z8mALn7d7GdW8941FfTpqVGBBv1GDBbu4aAbj" \
+OCTUSD_CONTRACT="octHFLx2Zp9SG3gPw98xy7cpQwEqcDUk5LHdQhEEyktgF3M" \
 python3 scripts/relay.py
 ```
 

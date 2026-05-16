@@ -80,7 +80,7 @@ contract OctUSD implements IOCS01 {
     self.oracle_spec_hash = spec_hash
     self.oct_usd_price = initial_price
     self.last_price_timestamp = 0
-    self.collateral_ratio = 4
+    self.collateral_ratio = 150
     self.mint_fee_bps = 0
     self.redeem_fee_bps = 0
     self.min_hold_time = 0
@@ -90,7 +90,7 @@ contract OctUSD implements IOCS01 {
     self.name = "Octra USD"
     self.symbol = "octUSD"
     self.decimals = 6
-    self.timelock_delay = 86400
+    self.timelock_delay = 3600
     self.pending_owner_ready = 0
     self.pending_oracle_ready = 0
     self.pending_spec_ready = 0
@@ -209,7 +209,7 @@ contract OctUSD implements IOCS01 {
 
   fn propose_set_collateral_ratio(new_ratio: int): bool {
     require(caller == self.owner, "only owner")
-    require(new_ratio >= 1, "ratio must be >= 1")
+    require(new_ratio >= 100, "ratio must be >= 100 (1x)")
     self.pending_collateral_ratio = new_ratio
     self.pending_collateral_ready = epoch + self.timelock_delay
     emit CollateralRatioChangeProposed(new_ratio, self.pending_collateral_ready)
@@ -336,7 +336,7 @@ contract OctUSD implements IOCS01 {
     let new_reserve = self.total_reserve - amount
     if (self.total_supply > 0) {
       let reserve_usd = (new_reserve * self.oct_usd_price) / 100000000
-      require(reserve_usd >= self.collateral_ratio * self.total_supply, "would violate collateral ratio")
+      require(reserve_usd * 100 >= self.collateral_ratio * self.total_supply, "would violate collateral ratio")
     }
 
     self.total_reserve = new_reserve
@@ -379,7 +379,7 @@ contract OctUSD implements IOCS01 {
 
     // Safety: block if system would become undercollateralized
     let reserve_usd = (new_reserve * self.oct_usd_price) / 100000000
-    require(reserve_usd >= self.collateral_ratio * new_supply, "insufficient collateral ratio")
+    require(reserve_usd * 100 >= self.collateral_ratio * new_supply, "insufficient collateral ratio")
 
     self.total_reserve = new_reserve
     self.total_supply = new_supply
