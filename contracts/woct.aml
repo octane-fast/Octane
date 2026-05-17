@@ -1,0 +1,99 @@
+contract WrappedOCT {
+  state {
+    total_supply: int
+    balances: map[address]int
+    grants: map[address]map[address]int
+    name: string
+    symbol: string
+    decimals: int
+  }
+
+  event Transfer(from: address, to: address, amount: int)
+  event Approval(owner_addr: address, spender: address, amount: int)
+  event Deposit(from: address, amount: int)
+  event Withdrawal(to: address, amount: int)
+
+  constructor() {
+    self.total_supply = 0
+    self.name = "Wrapped OCT"
+    self.symbol = "wOCT"
+    self.decimals = 6
+  }
+
+  // Deposit OCT, mint 1:1 wOCT
+  fn deposit(): bool {
+    require(value > 0, "no OCT sent")
+    self.balances[caller] = self.balances[caller] + value
+    self.total_supply = self.total_supply + value
+    emit Deposit(caller, value)
+    emit Transfer(self_addr, caller, value)
+    return true
+  }
+
+  // Burn wOCT, withdraw 1:1 OCT
+  fn withdraw(amount: int): bool {
+    require(amount > 0, "zero amount")
+    require(self.balances[caller] >= amount, "insufficient balance")
+    self.balances[caller] = self.balances[caller] - amount
+    self.total_supply = self.total_supply - amount
+    transfer(caller, amount)
+    emit Withdrawal(caller, amount)
+    emit Transfer(caller, self_addr, amount)
+    return true
+  }
+
+  // --- OCS-01 Token Standard ---
+
+  fn transfer(to: address, amount: int): bool {
+    let bal = self.balances[caller]
+    require(bal >= amount, "insufficient balance")
+    self.balances[caller] = bal - amount
+    self.balances[to] = self.balances[to] + amount
+    emit Transfer(caller, to, amount)
+    return true
+  }
+
+  fn grant(spender: address, amount: int): bool {
+    self.grants[caller][spender] = amount
+    emit Approval(caller, spender, amount)
+    return true
+  }
+
+  fn pull(from: address, to: address, amount: int): bool {
+    let allowed = self.grants[from][caller]
+    require(allowed >= amount, "allowance exceeded")
+    let bal = self.balances[from]
+    require(bal >= amount, "insufficient balance")
+    self.grants[from][caller] = allowed - amount
+    self.balances[from] = bal - amount
+    self.balances[to] = self.balances[to] + amount
+    emit Transfer(from, to, amount)
+    return true
+  }
+
+  // --- View Functions ---
+
+  view fn balance_of(addr: address): int {
+    return self.balances[addr]
+  }
+
+  view fn allowance(owner_addr: address, spender: address): int {
+    return self.grants[owner_addr][spender]
+  }
+
+  view fn get_name(): string {
+    return self.name
+  }
+
+  view fn get_symbol(): string {
+    return self.symbol
+  }
+
+  view fn get_total_supply(): int {
+    return self.total_supply
+  }
+
+  view fn get_decimals(): int {
+    return self.decimals
+  }
+}
