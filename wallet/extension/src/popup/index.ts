@@ -4,6 +4,9 @@ import type { Account } from '../lib/storage';
 import { toBase64 } from '../lib/crypto';
 import { txUrl, txLink } from '../lib/explorer';
 
+// Feature flags (must match background)
+const FEATURE_TOR = false;
+
 // Screens
 const screenSetup = document.getElementById('screen-setup')!;
 const screenCreate = document.getElementById('screen-create')!;
@@ -29,14 +32,25 @@ async function sendMsg(type: string, payload: Record<string, unknown> = {}): Pro
 
 // Init
 async function init() {
-  // Sync Tor toggle state from storage
-  const { torEnabled } = await chrome.storage.local.get('torEnabled');
-  const torSetup = document.getElementById('tor-toggle-setup') as HTMLInputElement;
-  const torUnlock = document.getElementById('tor-toggle-unlock') as HTMLInputElement;
-  const torMain = document.getElementById('tor-toggle-main') as HTMLInputElement;
-  torSetup.checked = !!torEnabled;
-  torUnlock.checked = !!torEnabled;
-  torMain.checked = !!torEnabled;
+  // Hide Tor UI when feature is disabled
+  if (!FEATURE_TOR) {
+    document.querySelectorAll('.tor-toggle, .tor-instructions, .tor-status, [id^="tor-"]').forEach(el => {
+      (el as HTMLElement).style.display = 'none';
+    });
+    // Also hide the header Tor toggle
+    document.querySelectorAll('.header-actions .toggle-row').forEach(el => {
+      (el as HTMLElement).style.display = 'none';
+    });
+  } else {
+    // Sync Tor toggle state from storage
+    const { torEnabled } = await chrome.storage.local.get('torEnabled');
+    const torSetup = document.getElementById('tor-toggle-setup') as HTMLInputElement;
+    const torUnlock = document.getElementById('tor-toggle-unlock') as HTMLInputElement;
+    const torMain = document.getElementById('tor-toggle-main') as HTMLInputElement;
+    torSetup.checked = !!torEnabled;
+    torUnlock.checked = !!torEnabled;
+    torMain.checked = !!torEnabled;
+  }
 
   const walletExists = await hasWallet();
   if (walletExists) {
@@ -48,6 +62,7 @@ async function init() {
 
 // Tor toggle sync
 function setupTorToggles() {
+  if (!FEATURE_TOR) return;
   const torSetup = document.getElementById('tor-toggle-setup') as HTMLInputElement;
   const torUnlock = document.getElementById('tor-toggle-unlock') as HTMLInputElement;
   const torMain = document.getElementById('tor-toggle-main') as HTMLInputElement;

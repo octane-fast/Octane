@@ -3,3 +3,4 @@
 target/
 node_modules/
 *.oct
+wallet/octane-wallet.zip
