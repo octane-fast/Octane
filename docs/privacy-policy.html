@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Octane Wallet — Privacy Policy</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 700px; margin: 40px auto; padding: 0 20px; line-height: 1.6; color: #333; }
+  h1 { font-size: 1.5em; }
+  h2 { font-size: 1.2em; margin-top: 1.5em; }
+</style>
+</head>
+<body>
+<h1>Octane Wallet — Privacy Policy</h1>
+<p><strong>Effective date:</strong> May 19, 2026</p>
+
+<h2>Data Collection</h2>
+<p>Octane Wallet does <strong>not</strong> collect, transmit, or store any personal data on external servers. All wallet data (encrypted seed phrases, preferences) is stored locally on your device using the Chrome Storage API.</p>
+
+<h2>Network Requests</h2>
+<p>The extension communicates exclusively with the Octra blockchain RPC endpoint (<code>https://octra.network/rpc</code>) to:</p>
+<ul>
+  <li>Query account balances and transaction history</li>
+  <li>Submit signed transactions</li>
+  <li>Fetch recommended network fees</li>
+</ul>
+<p>No analytics, telemetry, or tracking requests are made. No third-party services are contacted.</p>
+
+<h2>Cryptographic Keys</h2>
+<p>Your wallet seed phrase is encrypted with your password using scrypt + AES-GCM before being stored locally. Private keys are derived in-memory only while the wallet is unlocked and are cleared after 15 minutes of inactivity.</p>
+
+<h2>Content Scripts</h2>
+<p>The extension injects a small provider script on web pages to allow Octra-compatible decentralized applications to request wallet interactions (signing, sending transactions). This script does not read or modify page content; it only exposes a messaging API (<code>window.octra</code>) that requires explicit user approval for sensitive operations.</p>
+
+<h2>Permissions</h2>
+<ul>
+  <li><strong>storage</strong> — Save encrypted wallet data locally</li>
+  <li><strong>offscreen</strong> — Run cryptographic computations (zero-knowledge proofs) in a background document without blocking the UI</li>
+</ul>
+
+<h2>Third-Party Sharing</h2>
+<p>No data is shared with third parties. Period.</p>
+
+<h2>Changes</h2>
+<p>If this policy is updated, the new version will be published at this URL with an updated effective date.</p>
+
+<h2>Contact</h2>
+<p>Questions? Open an issue at <a href="https://github.com/octane-defi/octUSD">github.com/octane-defi/octUSD</a>.</p>
+</body>
+</html>

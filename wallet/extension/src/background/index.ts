@@ -12,10 +12,14 @@ import {
   pedersenCommit, makeZeroProofBound, makeRangeProof, ctSub, getPubkey, getAesKat,
 } from '../lib/pvac';
 
-// Tor proxy management
-const TOR_SOCKS_PORT = 9150; // Tor Browser default; standalone Tor uses 9050
+// Feature flags
+const FEATURE_TOR = false; // Disabled for Chrome Web Store submission
+
+// Tor proxy management (gated behind FEATURE_TOR)
+const TOR_SOCKS_PORT = 9150;
 
 async function enableTorProxy() {
+  if (!FEATURE_TOR) return;
   const config = {
     mode: 'pac_script',
     pacScript: {
@@ -31,13 +35,16 @@ async function enableTorProxy() {
 }
 
 async function disableTorProxy() {
+  if (!FEATURE_TOR) return;
   await chrome.proxy.settings.clear({ scope: 'regular' });
 }
 
 // Restore Tor state on service worker startup
-chrome.storage.local.get('torEnabled').then(({ torEnabled }) => {
-  if (torEnabled) enableTorProxy();
-});
+if (FEATURE_TOR) {
+  chrome.storage.local.get('torEnabled').then(({ torEnabled }) => {
+    if (torEnabled) enableTorProxy();
+  });
+}
 
 // In-memory unlocked state
 let unlockedMnemonic: string | null = null;
@@ -386,7 +393,16 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
           break;
         }
         case 'RPC_PASSTHROUGH': {
+          const RPC_ALLOWLIST = [
+            'octra_balance', 'octra_tokensByAddress', 'octra_account',
+            'octra_transaction', 'octra_recommendedFee', 'node_status',
+            'contract_call',
+          ];
           const { method, params } = payload as { method: string; params: unknown[] };
+          if (!RPC_ALLOWLIST.includes(method)) {
+            sendResponse({ error: `RPC method not allowed: ${method}` });
+            break;
+          }
           const result = await rpc.rpcCall(method, params ?? []);
           sendResponse(result);
           break;
