@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Octane</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700&display=swap" rel="stylesheet">
+  <script type="module" crossorigin src="../../popup.js"></script>
+  <link rel="stylesheet" crossorigin href="../../assets/popup.css">
+</head>
+<body>
+  <div id="app">
+    <!-- Setup Screen -->
+    <div id="screen-setup" class="screen">
+      <svg class="logo logo-large" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg"><rect width="128" height="128" rx="14" fill="#060d1f"/><circle cx="64" cy="64" r="58" fill="none" stroke="rgba(26,86,219,0.15)" stroke-width="0.5"/><circle cx="64" cy="64" r="53" fill="none" stroke="rgba(26,86,219,0.3)" stroke-width="0.5"/><circle cx="64" cy="64" r="48" fill="#1a56db"/><circle cx="64" cy="64" r="48" fill="none" stroke="#1a56db" stroke-width="1.5"/><circle cx="64" cy="64" r="38" fill="#060d1f"/><circle cx="64" cy="64" r="34" fill="none" stroke="rgba(96,165,250,0.4)" stroke-width="0.75"/><g class="flame" transform="translate(64,64) scale(0.42) translate(-196,-200)"><path fill="#fff" d="M196,268 C170,268 152,248 152,224 C152,204 162,192 170,180 C174,174 176,166 174,156 C180,162 184,170 184,180 C184,170 190,154 200,142 C200,154 206,164 214,170 C220,158 218,146 214,136 C226,148 240,168 240,192 C240,204 236,214 228,222 C224,212 222,200 224,190 C216,202 212,218 214,232 C210,226 208,218 208,210 C204,220 202,240 208,254 C204,260 200,264 196,268 Z"/></g></svg>
+      <h1>Octane</h1>
+      <button id="btn-create">Create New Wallet</button>
+      <button id="btn-import" class="secondary">Import Seed Phrase</button>
+      <div class="tor-toggle">
+        <label class="toggle-row">
+          <span class="toggle-label">Route via Tor</span>
+          <input type="checkbox" id="tor-toggle-setup">
+        </label>
+        <a href="https://www.torproject.org/download/" target="_blank" rel="noopener" class="tor-link">Get Tor ↗</a>
+      </div>
+      <div id="tor-status-setup" class="tor-status"></div>
+      <div class="tor-instructions">
+        <p class="tor-instructions-title">How to use Tor privacy:</p>
+        <ol>
+          <li>Download & open <a href="https://www.torproject.org/download/" target="_blank" rel="noopener">Tor Browser</a></li>
+          <li>Keep Tor Browser running in the background</li>
+          <li>Enable the toggle above</li>
+          <li>All RPC calls will route through Tor</li>
+        </ol>
+      </div>
+    </div>
+
+    <!-- Create Wallet -->
+    <div id="screen-create" class="screen hidden">
+      <h2>Your Seed Phrase</h2>
+      <div id="mnemonic-display" class="mnemonic-box"></div>
+      <p class="warning">Write down these 12 words. Never share them.</p>
+      <label>Password</label>
+      <input type="password" id="create-password" placeholder="Set a password">
+      <label>Confirm</label>
+      <input type="password" id="create-password-confirm" placeholder="Confirm password">
+      <button id="btn-confirm-create">Continue</button>
+      <button class="link" id="btn-back-setup">Back</button>
+    </div>
+
+    <!-- Import Wallet -->
+    <div id="screen-import" class="screen hidden">
+      <h2>Import Wallet</h2>
+      <textarea id="import-mnemonic" rows="3" placeholder="Enter 12-word seed phrase"></textarea>
+      <label>Password</label>
+      <input type="password" id="import-password" placeholder="Set a password">
+      <button id="btn-confirm-import">Import</button>
+      <button class="link" id="btn-back-setup2">Back</button>
+    </div>
+
+    <!-- Unlock -->
+    <div id="screen-unlock" class="screen hidden">
+      <svg class="logo logo-large" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg"><rect width="128" height="128" rx="14" fill="#060d1f"/><circle cx="64" cy="64" r="58" fill="none" stroke="rgba(26,86,219,0.15)" stroke-width="0.5"/><circle cx="64" cy="64" r="53" fill="none" stroke="rgba(26,86,219,0.3)" stroke-width="0.5"/><circle cx="64" cy="64" r="48" fill="#1a56db"/><circle cx="64" cy="64" r="48" fill="none" stroke="#1a56db" stroke-width="1.5"/><circle cx="64" cy="64" r="38" fill="#060d1f"/><circle cx="64" cy="64" r="34" fill="none" stroke="rgba(96,165,250,0.4)" stroke-width="0.75"/><g class="flame" transform="translate(64,64) scale(0.42) translate(-196,-200)"><path fill="#fff" d="M196,268 C170,268 152,248 152,224 C152,204 162,192 170,180 C174,174 176,166 174,156 C180,162 184,170 184,180 C184,170 190,154 200,142 C200,154 206,164 214,170 C220,158 218,146 214,136 C226,148 240,168 240,192 C240,204 236,214 228,222 C224,212 222,200 224,190 C216,202 212,218 214,232 C210,226 208,218 208,210 C204,220 202,240 208,254 C204,260 200,264 196,268 Z"/></g></svg>
+      <h1>Octane</h1>
+      <input type="password" id="unlock-password" placeholder="Enter password">
+      <button id="btn-unlock">Unlock</button>
+      <button id="btn-biometric" class="secondary hidden">Unlock with Touch ID</button>
+      <div class="tor-toggle">
+        <label class="toggle-row">
+          <span class="toggle-label">Route via Tor</span>
+          <input type="checkbox" id="tor-toggle-unlock">
+          <span class="toggle-slider"></span>
+        </label>
+        <a href="https://www.torproject.org/download/" target="_blank" rel="noopener" class="tor-link" id="tor-download-link">Get Tor ↗</a>
+      </div>
+      <div id="tor-status" class="tor-status"></div>
+      <div class="tor-instructions">
+        <p class="tor-instructions-title">How to use Tor privacy:</p>
+        <ol>
+          <li>Download & open <a href="https://www.torproject.org/download/" target="_blank" rel="noopener">Tor Browser</a></li>
+          <li>Keep Tor Browser running in the background</li>
+          <li>Enable the toggle above</li>
+          <li>All RPC calls will route through Tor</li>
+        </ol>
+      </div>
+    </div>
+
+    <!-- Main Dashboard -->
+    <div id="screen-main" class="screen hidden">
+      <div class="header">
+        <svg class="header-logo" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg"><rect width="128" height="128" rx="14" fill="#060d1f"/><circle cx="64" cy="64" r="58" fill="none" stroke="rgba(26,86,219,0.15)" stroke-width="0.5"/><circle cx="64" cy="64" r="53" fill="none" stroke="rgba(26,86,219,0.3)" stroke-width="0.5"/><circle cx="64" cy="64" r="48" fill="#1a56db"/><circle cx="64" cy="64" r="48" fill="none" stroke="#1a56db" stroke-width="1.5"/><circle cx="64" cy="64" r="38" fill="#060d1f"/><circle cx="64" cy="64" r="34" fill="none" stroke="rgba(96,165,250,0.4)" stroke-width="0.75"/><g transform="translate(64,64) scale(0.42) translate(-196,-200)"><path fill="#fff" d="M196,268 C170,268 152,248 152,224 C152,204 162,192 170,180 C174,174 176,166 174,156 C180,162 184,170 184,180 C184,170 190,154 200,142 C200,154 206,164 214,170 C220,158 218,146 214,136 C226,148 240,168 240,192 C240,204 236,214 228,222 C224,212 222,200 224,190 C216,202 212,218 214,232 C210,226 208,218 208,210 C204,220 202,240 208,254 C204,260 200,264 196,268 Z"/></g></svg>
+        <div class="header-actions">
+          <label class="toggle-row compact">
+            <span class="toggle-label">Tor</span>
+            <input type="checkbox" id="tor-toggle-main">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+      </div>
+      <div class="account-selector">
+        <select id="account-select"></select>
+        <button id="btn-copy-address" class="icon-btn" title="Copy Address"><svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg></button>
+        <button id="btn-add-account" class="icon-btn" title="Add Account">+</button>
+      </div>
+      <span id="display-address" class="hidden"></span>
+      <div class="balance-section">
+        <div class="balance-label">Balance</div>
+        <div id="display-balance" class="balance-value">--</div>
+      </div>
+      <div class="tabs">
+        <button class="tab active" data-tab="tokens">Tokens</button>
+        <button class="tab" data-tab="activity">Activity</button>
+        <button class="tab" data-tab="send">Send</button>
+      </div>
+      <div id="tab-tokens" class="tab-content">
+        <div id="token-list" class="token-list"><p class="muted">Loading...</p></div>
+      </div>
+      <div id="tab-activity" class="tab-content hidden">
+        <div id="activity-list" class="activity-list"><p class="muted">Loading...</p></div>
+        <a id="explorer-link" href="https://octrascan.io/" target="_blank" rel="noopener" class="explorer-link">View all on OctraScan ↗</a>
+      </div>
+      <div id="tab-send" class="tab-content hidden">
+        <div class="encrypted-balance-row">
+          <span class="encrypted-label">Shielded Balance</span>
+          <span id="encrypted-balance-display" class="encrypted-value">
+            <button id="btn-decrypt-balance" class="decrypt-btn" title="Decrypt shielded balance">Reveal</button>
+          </span>
+        </div>
+        <div class="send-to-wrap">
+          <input type="text" id="send-to" placeholder="Recipient address" autocomplete="off">
+          <div id="send-to-suggestions" class="suggestions hidden"></div>
+        </div>
+        <input type="text" id="send-amount" placeholder="Amount (OCT)">
+        <div class="send-mode-row">
+          <button id="btn-shield" class="send-mode-btn">Shield</button>
+          <button id="btn-send" class="send-mode-btn active">Send</button>
+          <button id="btn-unshield" class="send-mode-btn">Unshield</button>
+        </div>
+        <div id="send-result" class="result"></div>
+      </div>
+      <button id="btn-lock" class="link lock-link">Lock Wallet</button>
+    </div>
+
+    <div id="toast" class="toast hidden"></div>
+  </div>
+</body>
+</html>

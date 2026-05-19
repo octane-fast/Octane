@@ -7,7 +7,7 @@ description: 'Develop, compile, deploy, and interact with smart contracts on the
 
 ## Network
 
-- **RPC**: `http://46.101.86.250:8080/rpc` (the default `rpc.octra.org` does NOT resolve)
+- **RPC**: `https://octra.network/rpc`
 - **Version**: v3.0.0-irmin
 - **Token units**: 1 OCT = 10^6 raw units (balance_raw)
 
