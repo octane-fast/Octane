@@ -3,7 +3,7 @@
   "name": "Octane Wallet",
   "version": "0.1.0",
   "description": "Wallet for the Octra network",
-  "permissions": ["storage", "offscreen"],
+  "permissions": ["storage", "offscreen", "proxy"],
   "content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
   },

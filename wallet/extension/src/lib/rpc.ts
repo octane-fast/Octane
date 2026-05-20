@@ -3,20 +3,34 @@ import type { RpcResponse } from './types';
 const RPC_URL = 'https://octra.network/rpc';
 let rpcId = 0;
 
+const MAX_RETRIES = 3;
+const RETRY_DELAYS = [1000, 2000, 4000]; // exponential backoff
+
 async function rpcCall(method: string, params: unknown[] = []): Promise<unknown> {
-  const res = await fetch(RPC_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      jsonrpc: '2.0',
-      id: ++rpcId,
-      method,
-      params,
-    }),
-  });
-  const data: RpcResponse = await res.json();
-  if (data.error) throw new Error(data.error.message);
-  return data.result;
+  let lastError: Error | null = null;
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const res = await fetch(RPC_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: ++rpcId,
+          method,
+          params,
+        }),
+      });
+      const data: RpcResponse = await res.json();
+      if (data.error) throw new Error(data.error.message);
+      return data.result;
+    } catch (err) {
+      lastError = err as Error;
+      if (attempt < MAX_RETRIES) {
+        await new Promise(r => setTimeout(r, RETRY_DELAYS[attempt]));
+      }
+    }
+  }
+  throw lastError!;
 }
 
 export async function getBalance(address: string): Promise<{

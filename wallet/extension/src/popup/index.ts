@@ -5,7 +5,7 @@ import { toBase64 } from '../lib/crypto';
 import { txUrl, txLink } from '../lib/explorer';
 
 // Feature flags (must match background)
-const FEATURE_TOR = false;
+const FEATURE_TOR = true;
 
 // Screens
 const screenSetup = document.getElementById('screen-setup')!;
@@ -220,6 +220,50 @@ document.querySelectorAll('.tab').forEach(tab => {
   });
 });
 
+// === Polling Services ===
+// Centralized polling for all live data updates
+
+async function refreshBalance() {
+  const balRes = await sendMsg('GET_BALANCE') as { formatted?: string; error?: string };
+  if (balRes.formatted) {
+    document.getElementById('display-balance')!.textContent = `${balRes.formatted} OCT`;
+  }
+}
+
+async function refreshTokens() {
+  const balText = document.getElementById('display-balance')!.textContent?.replace(' OCT', '') ?? '0';
+  const tokRes = await sendMsg('GET_TOKENS') as { tokens?: Array<{ name: string; symbol: string; balance: string; decimals: number }> };
+  const tokenList = document.getElementById('token-list')!;
+  let html = `<div class="token-item"><div><div class="token-name">Octra</div><div class="token-symbol">OCT</div></div><div class="token-balance">${escapeHtml(balText)}</div></div>`;
+  if (tokRes.tokens && tokRes.tokens.length > 0) {
+    html += tokRes.tokens.map(t => {
+      const bal = (Number(t.balance) / Math.pow(10, t.decimals)).toFixed(t.decimals > 4 ? 4 : t.decimals);
+      return `<div class="token-item"><div><div class="token-name">${escapeHtml(t.name)}</div><div class="token-symbol">${escapeHtml(t.symbol)}</div></div><div class="token-balance">${escapeHtml(bal)}</div></div>`;
+    }).join('');
+  }
+  tokenList.innerHTML = html;
+}
+
+const PollingService = {
+  timers: [] as ReturnType<typeof setInterval>[],
+
+  start() {
+    this.stop(); // Clear any existing timers
+    // Balance + tokens: every 3s
+    this.timers.push(setInterval(async () => {
+      await refreshBalance();
+      await refreshTokens();
+    }, 3000));
+    // Activity: every 1s
+    this.timers.push(setInterval(() => loadActivity(), 1000));
+  },
+
+  stop() {
+    this.timers.forEach(t => clearInterval(t));
+    this.timers = [];
+  },
+};
+
 // Main screen
 async function loadMainScreen() {
   showScreen(screenMain);
@@ -242,52 +286,77 @@ async function loadMainScreen() {
   addrEl.setAttribute('data-full', fullAddr);
   addrEl.textContent = fullAddr.slice(0, 12) + '…' + fullAddr.slice(-10);
 
-  // Load balance
-  const balRes = await sendMsg('GET_BALANCE') as { formatted?: string; error?: string };
-  document.getElementById('display-balance')!.textContent = `${balRes.formatted ?? '0'} OCT`;
+  // Initial data load
+  await refreshBalance();
+  await refreshTokens();
+  await loadActivity();
 
-  // Load tokens
-  const tokRes = await sendMsg('GET_TOKENS') as { tokens?: Array<{ name: string; symbol: string; balance: string; decimals: number }> };
-  const tokenList = document.getElementById('token-list')!;
-  // Always show native OCT first
-  const octBal = balRes.formatted ?? '0';
-  let tokensHtml = `<div class="token-item"><div><div class="token-name">Octra</div><div class="token-symbol">OCT</div></div><div class="token-balance">${escapeHtml(octBal)}</div></div>`;
-  if (tokRes.tokens && tokRes.tokens.length > 0) {
-    tokensHtml += tokRes.tokens.map(t => {
-      const bal = (Number(t.balance) / Math.pow(10, t.decimals)).toFixed(t.decimals > 4 ? 4 : t.decimals);
-      return `<div class="token-item"><div><div class="token-name">${escapeHtml(t.name)}</div><div class="token-symbol">${escapeHtml(t.symbol)}</div></div><div class="token-balance">${escapeHtml(bal)}</div></div>`;
-    }).join('');
-  }
-  tokenList.innerHTML = tokensHtml;
-
-  // Load activity
-  loadActivity();
+  // Start polling services
+  PollingService.start();
 }
+
+// In-memory activity cache, keyed by tx_hash for deduplication
+const activityCache = new Map<string, Record<string, unknown>>();
+let lastActivityHtml = '';
 
 async function loadActivity() {
   const actList = document.getElementById('activity-list')!;
-  actList.innerHTML = '<p class="muted">Loading...</p>';
+  const pendingEl = document.getElementById('activity-pending')!;
 
-  // Show running unshield job at top
-  const { activeUnshieldJob } = await chrome.storage.local.get('activeUnshieldJob');
-  let pendingHtml = '';
+  // Show running unshield job at top (separate element, no flicker on main list)
+  const { activeUnshieldJob, activeUnshieldStart } = await chrome.storage.local.get(['activeUnshieldJob', 'activeUnshieldStart']);
   if (activeUnshieldJob) {
     const job = await sendMsg('GET_JOB_STATUS', { jobId: activeUnshieldJob }) as { status: string; step?: string };
-    if (job.status === 'running') {
-      pendingHtml = `<div class="activity-item pending">
+    if (job.status === 'running' || job.status === 'pending_unlock' || job.status === 'crypto_done') {
+      const elapsed = activeUnshieldStart ? Math.floor((Date.now() - activeUnshieldStart) / 1000) : 0;
+      const timeStr = elapsed < 60 ? `${elapsed}s ago` : `${Math.floor(elapsed / 60)}m ${elapsed % 60}s ago`;
+      pendingEl.innerHTML = `<div class="activity-item pending">
         <div class="activity-row"><span class="activity-type unshield">Unshielding</span><span class="activity-amount">In Progress</span></div>
-        <div class="activity-row"><span class="activity-addr">${escapeHtml(job.step ?? 'working...')}</span><span class="activity-time">Now</span></div>
+        <div class="activity-row"><span class="activity-addr">${escapeHtml(job.step ?? 'working...')}</span><span class="activity-time">${timeStr}</span></div>
+        <div class="activity-row"><button class="cancel-unshield" data-job="${escapeHtml(activeUnshieldJob)}">Cancel</button></div>
       </div>`;
+      pendingEl.querySelector('.cancel-unshield')?.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const jobId = (e.target as HTMLElement).dataset.job!;
+        await sendMsg('CANCEL_UNSHIELD', { jobId });
+        await chrome.storage.local.remove(['activeUnshieldJob', 'activeUnshieldStart']);
+        pendingEl.innerHTML = '';
+        if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+        const resultEl = document.getElementById('send-result');
+        if (resultEl) resultEl.textContent = 'Unshield cancelled.';
+      });
+    } else {
+      pendingEl.innerHTML = '';
     }
+  } else {
+    pendingEl.innerHTML = '';
   }
 
   const myAddr = document.getElementById('display-address')!.getAttribute('data-full') ?? '';
   const res = await sendMsg('GET_ACTIVITY') as { transactions?: Array<Record<string, unknown>>; error?: string };
-  if (res.error || !res.transactions || res.transactions.length === 0) {
-    actList.innerHTML = pendingHtml || '<p class="muted">No recent activity</p>';
+
+  // Merge new results into cache (add-only); on error, keep existing cache
+  if (!res.error && res.transactions && res.transactions.length > 0) {
+    for (const tx of res.transactions) {
+      const hash = String(tx.tx_hash ?? '');
+      if (hash) activityCache.set(hash, tx);
+    }
+  }
+
+  // Render from cache
+  if (activityCache.size === 0) {
+    const emptyHtml = '<p class="muted">No recent activity</p>';
+    if (lastActivityHtml !== emptyHtml) {
+      actList.innerHTML = emptyHtml;
+      lastActivityHtml = emptyHtml;
+    }
     return;
   }
-  actList.innerHTML = pendingHtml + res.transactions.map(tx => {
+
+  // Sort by timestamp descending
+  const sorted = [...activityCache.values()].sort((a, b) => Number(b.timestamp ?? 0) - Number(a.timestamp ?? 0));
+
+  const newHtml = sorted.map(tx => {
     const from = String(tx.from ?? '');
     const to = String(tx.to ?? tx.to_ ?? '');
     const amountRaw = Number(tx.amount_raw ?? tx.amount ?? 0);
@@ -320,13 +389,19 @@ async function loadActivity() {
     </div>`;
   }).join('');
 
-  // Click to open on explorer
-  actList.querySelectorAll('.activity-item').forEach(el => {
-    el.addEventListener('click', () => {
-      const hash = (el as HTMLElement).dataset.hash;
-      if (hash) window.open(txUrl(hash), '_blank');
+  // Only update DOM if content actually changed
+  if (newHtml !== lastActivityHtml) {
+    actList.innerHTML = newHtml;
+    lastActivityHtml = newHtml;
+
+    // Click to open on explorer
+    actList.querySelectorAll('.activity-item').forEach(el => {
+      el.addEventListener('click', () => {
+        const hash = (el as HTMLElement).dataset.hash;
+        if (hash) window.open(txUrl(hash), '_blank');
+      });
     });
-  });
+  }
 }
 
 // Switch account
@@ -407,22 +482,35 @@ function showSuggestions(filter: string) {
 }
 
 // Send / Shield / Unshield
-const sendModeButtons = document.querySelectorAll('.send-mode-btn');
+const sendModeButtons = document.querySelectorAll('.sub-tab');
 let sendMode: 'send' | 'shield' | 'unshield' = 'send';
+const submitBtn = document.getElementById('btn-submit-action') as HTMLButtonElement;
+
+function updateConfirmState() {
+  const amount = (document.getElementById('send-amount') as HTMLInputElement).value.trim();
+  const to = (document.getElementById('send-to') as HTMLInputElement).value.trim();
+  const filled = sendMode === 'send' ? (!!amount && !!to) : !!amount;
+  submitBtn.disabled = !filled;
+}
 
 sendModeButtons.forEach(btn => {
   btn.addEventListener('click', () => {
-    const id = btn.id;
-    if (id === 'btn-send') sendMode = 'send';
-    else if (id === 'btn-shield') sendMode = 'shield';
-    else if (id === 'btn-unshield') sendMode = 'unshield';
+    const mode = (btn as HTMLElement).dataset.mode as 'send' | 'shield' | 'unshield';
+    sendMode = mode;
     sendModeButtons.forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
     // Show/hide recipient field based on mode
     const toWrap = document.querySelector('.send-to-wrap') as HTMLElement;
     toWrap.style.display = sendMode === 'send' ? '' : 'none';
+    // Update submit button label
+    submitBtn.textContent = sendMode === 'send' ? 'Confirm Send' : sendMode === 'shield' ? 'Confirm Shield' : 'Confirm Unshield';
+    updateConfirmState();
   });
 });
+
+// Validate inputs on typing
+document.getElementById('send-amount')!.addEventListener('input', updateConfirmState);
+document.getElementById('send-to')!.addEventListener('input', updateConfirmState);
 
 async function fetchEncryptedBalance() {
   const el = document.getElementById('encrypted-balance-display')!;
@@ -456,36 +544,25 @@ async function revealShieldedBalance() {
 // Bind initial decrypt button from HTML
 document.getElementById('btn-decrypt-balance')?.addEventListener('click', revealShieldedBalance);
 
-document.getElementById('btn-send')!.addEventListener('click', async () => {
-  if (sendMode !== 'send') return handleShieldAction();
-  const to = (document.getElementById('send-to') as HTMLInputElement).value.trim();
+// Single submit handler based on current mode
+submitBtn.addEventListener('click', async () => {
   const amount = (document.getElementById('send-amount') as HTMLInputElement).value.trim();
-  if (!to || !amount) { showToast('Fill in all fields'); return; }
   const resultEl = document.getElementById('send-result')!;
-  resultEl.textContent = 'Sending...';
-  const res = await sendMsg('SEND_TRANSACTION', { to, amount }) as { hash?: string; error?: string };
-  if (res.error) {
-    resultEl.textContent = `Error: ${res.error}`;
+
+  if (sendMode === 'send') {
+    const to = (document.getElementById('send-to') as HTMLInputElement).value.trim();
+    if (!to || !amount) { showToast('Fill in all fields'); return; }
+    resultEl.textContent = 'Sending...';
+    const res = await sendMsg('SEND_TRANSACTION', { to, amount }) as { hash?: string; error?: string };
+    if (res.error) {
+      resultEl.textContent = `Error: ${res.error}`;
+    } else {
+      resultEl.innerHTML = txLink(res.hash!, 'Confirmed — View on OctraScan ↗');
+      showToast('Transaction sent!');
+    }
   } else {
-    resultEl.innerHTML = txLink(res.hash!, 'Confirmed — View on OctraScan ↗');
-    showToast('Transaction sent!');
+    await handleShieldAction();
   }
-});
-
-document.getElementById('btn-shield')!.addEventListener('click', async () => {
-  sendMode = 'shield';
-  sendModeButtons.forEach(b => b.classList.remove('active'));
-  document.getElementById('btn-shield')!.classList.add('active');
-  (document.querySelector('.send-to-wrap') as HTMLElement).style.display = 'none';
-  await handleShieldAction();
-});
-
-document.getElementById('btn-unshield')!.addEventListener('click', async () => {
-  sendMode = 'unshield';
-  sendModeButtons.forEach(b => b.classList.remove('active'));
-  document.getElementById('btn-unshield')!.classList.add('active');
-  (document.querySelector('.send-to-wrap') as HTMLElement).style.display = 'none';
-  await handleShieldAction();
 });
 
 async function handleShieldAction() {
@@ -508,8 +585,8 @@ async function handleShieldAction() {
     if (res.error) {
       resultEl.textContent = `Error: ${res.error}`;
     } else if (res.jobId) {
-      // Save job ID and start polling
-      await chrome.storage.local.set({ activeUnshieldJob: res.jobId });
+      // Save job ID + start time and start polling
+      await chrome.storage.local.set({ activeUnshieldJob: res.jobId, activeUnshieldStart: Date.now() });
       pollJobStatus(res.jobId, resultEl);
     }
   }
@@ -531,10 +608,14 @@ function pollJobStatus(jobId: string, resultEl: HTMLElement) {
     const res = await sendMsg('GET_JOB_STATUS', { jobId }) as { status: string; step?: string; hash?: string; error?: string };
     if (res.status === 'running') {
       resultEl.textContent = `Unshielding — ${res.step ?? 'working...'}`;
+    } else if (res.status === 'pending_unlock') {
+      resultEl.textContent = `Unshielding — ${res.step ?? 'waiting for unlock...'}`;
+    } else if (res.status === 'crypto_done') {
+      resultEl.textContent = 'Unshielding — submitting transaction...';
     } else if (res.status === 'done') {
       clearInterval(pollTimer!);
       pollTimer = null;
-      await chrome.storage.local.remove('activeUnshieldJob');
+      await chrome.storage.local.remove(['activeUnshieldJob', 'activeUnshieldStart']);
       resultEl.innerHTML = txLink(res.hash!, 'Confirmed — View on OctraScan ↗');
       showToast('Funds unshielded!');
       fetchEncryptedBalance();
@@ -542,8 +623,12 @@ function pollJobStatus(jobId: string, resultEl: HTMLElement) {
     } else if (res.status === 'error') {
       clearInterval(pollTimer!);
       pollTimer = null;
-      await chrome.storage.local.remove('activeUnshieldJob');
+      await chrome.storage.local.remove(['activeUnshieldJob', 'activeUnshieldStart']);
       resultEl.textContent = `Error: ${res.error}`;
+    } else if (res.status === 'cancelled') {
+      clearInterval(pollTimer!);
+      pollTimer = null;
+      resultEl.textContent = 'Unshield cancelled.';
     }
   }, 2000);
 }

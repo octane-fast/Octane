@@ -261,11 +261,12 @@ label {
 .activity-type.receive { color: var(--success); }
 .activity-type.call { color: var(--primary); }
 .activity-type.unshield { color: #f59e0b; }
-.activity-item.pending { border-color: #f59e0b; animation: pulse-border 2s infinite; }
-@keyframes pulse-border { 0%, 100% { border-color: #f59e0b; } 50% { border-color: transparent; } }
+.activity-item.pending { border-color: #f59e0b; background: rgba(245, 158, 11, 0.05); }
 .activity-amount { font-size: 13px; font-weight: 600; }
 .activity-addr { font-size: 11px; color: var(--text-muted); font-family: monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 200px; }
 .activity-time { font-size: 10px; color: var(--text-muted); }
+.cancel-unshield { background: none; border: 1px solid #f59e0b; color: #f59e0b; font-size: 11px; padding: 2px 8px; border-radius: 4px; cursor: pointer; margin-top: 4px; }
+.cancel-unshield:hover { background: rgba(245, 158, 11, 0.1); }
 .explorer-link {
   display: block;
   text-align: center;
@@ -314,6 +315,31 @@ label {
   cursor: not-allowed;
 }
 
+.sub-tabs {
+  display: flex;
+  gap: 0;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+.sub-tab {
+  flex: 1;
+  padding: 8px 0;
+  font-size: 13px;
+  background: none;
+  border: none;
+  border-radius: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.sub-tab.active {
+  color: var(--primary);
+  border-bottom-color: var(--primary);
+}
+.sub-tab:hover:not(.active) {
+  color: var(--text);
+}
 .send-mode-row {
   display: flex;
   gap: 6px;
@@ -337,6 +363,10 @@ label {
 .send-mode-btn:hover:not(.active) {
   border-color: var(--primary);
   color: var(--text);
+}
+button.primary:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .suggestions {

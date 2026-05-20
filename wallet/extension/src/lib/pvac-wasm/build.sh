@@ -31,13 +31,13 @@ echo "Building PVAC WASM..."
 cp src/aes_soft.hpp vendor/pvac/aes_soft.hpp
 
 # Step 1: Compile tiny-AES-c (C code, separate TU to avoid name collisions)
-$EMCC -O2 -c \
+$EMCC -O3 -msimd128 -mbulk-memory -flto -c \
   -DAES256=1 -DECB=1 -DCBC=0 -DCTR=0 \
   vendor/tiny-aes-c/aes.c \
   -o /tmp/pvac_tiny_aes.o
 
 # Step 2: Compile + link C++ sources with the AES object
-$EMCC -O2 \
+$EMCC -O3 -msimd128 -mbulk-memory -flto \
   -s WASM=1 \
   -s EXPORTED_RUNTIME_METHODS='["ccall","cwrap","getValue","setValue","HEAPU8"]' \
   -s EXPORTED_FUNCTIONS='["_pvac_wasm_init","_pvac_wasm_encrypt","_pvac_wasm_decrypt","_pvac_wasm_pedersen_commit","_pvac_wasm_make_zero_proof_bound","_pvac_wasm_make_range_proof","_pvac_wasm_ct_sub","_pvac_wasm_get_pubkey","_pvac_wasm_free","_pvac_wasm_aes_kat","_malloc","_free"]' \

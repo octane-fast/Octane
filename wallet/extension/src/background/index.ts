@@ -13,7 +13,7 @@ import {
 } from '../lib/pvac';
 
 // Feature flags
-const FEATURE_TOR = false; // Disabled for Chrome Web Store submission
+const FEATURE_TOR = true;
 
 // Tor proxy management (gated behind FEATURE_TOR)
 const TOR_SOCKS_PORT = 9150;
@@ -46,6 +46,25 @@ if (FEATURE_TOR) {
   });
 }
 
+// Check for pending unshield jobs on SW startup (crypto may have finished while SW was dead)
+chrome.storage.local.get(null).then((all) => {
+  for (const key of Object.keys(all)) {
+    if (key.startsWith('job_') && !key.includes('_crypto') && !key.includes('_params')) {
+      const job = all[key];
+      if (job.status === 'crypto_done' || job.status === 'pending_unlock') {
+        const jobId = key.replace('job_', '');
+        resumeUnshieldSubmission(jobId);
+      } else if (job.status === 'running') {
+        // SW may have died mid-submission; resume if crypto result exists
+        const jobId = key.replace('job_', '');
+        if (all[`job_${jobId}_crypto`]) {
+          resumeUnshieldSubmission(jobId);
+        }
+      }
+    }
+  }
+});
+
 // In-memory unlocked state
 let unlockedMnemonic: string | null = null;
 let activeHdIndex: number = 0;
@@ -73,6 +92,8 @@ type MessageHandler = (
 ) => boolean | void;
 
 const handler: MessageHandler = (message, _sender, sendResponse) => {
+  // Ignore messages targeted at other contexts
+  if ((message as any).target && (message as any).target !== 'background') return;
   const { type, payload } = message as { type: string; payload: Record<string, unknown> };
 
   (async () => {
@@ -84,6 +105,18 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
           activeHdIndex = hdIndex ?? 0;
           resetLockTimer();
           sendResponse({ success: true });
+          // Resume any pending_unlock jobs now that wallet is unlocked
+          chrome.storage.local.get(null).then((all) => {
+            for (const key of Object.keys(all)) {
+              if (key.startsWith('job_') && !key.includes('_crypto') && !key.includes('_params')) {
+                const job = all[key];
+                if (job.status === 'pending_unlock') {
+                  const jobId = key.replace('job_', '');
+                  resumeUnshieldSubmission(jobId);
+                }
+              }
+            }
+          });
           break;
         }
         case 'LOCK': {
@@ -99,17 +132,19 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
             try {
               const ctrl = new AbortController();
               const timer = setTimeout(() => ctrl.abort(), 3000);
-              await fetch(`http://127.0.0.1:${TOR_SOCKS_PORT}/`, {
-                method: 'GET',
-                signal: ctrl.signal,
-              }).catch(e => {
-                // A connection refused means Tor isn't running
-                // A "connection reset" or response means it IS running (SOCKS proxies reset HTTP)
-                if (e.name === 'AbortError' || (e.message && e.message.includes('Failed to fetch'))) {
+              try {
+                await fetch(`http://127.0.0.1:${TOR_SOCKS_PORT}/`, {
+                  method: 'GET',
+                  signal: ctrl.signal,
+                });
+              } catch (e: any) {
+                // AbortError means timeout = nothing listening
+                if (e.name === 'AbortError') {
                   throw new Error('Tor proxy not reachable');
                 }
-                // Any other error (connection reset, etc.) means the port is open = Tor is running
-              });
+                // Any other error (Failed to fetch, connection reset, etc.)
+                // means the port IS open — SOCKS proxies reject HTTP requests
+              }
               clearTimeout(timer);
               await enableTorProxy();
               sendResponse({ success: true });
@@ -323,6 +358,15 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
           sendResponse(data[`job_${jobId}`] ?? { status: 'unknown' });
           break;
         }
+        case 'CANCEL_UNSHIELD': {
+          const { jobId } = payload as { jobId: string };
+          const storageKey = `job_${jobId}`;
+          await chrome.storage.local.set({ [storageKey]: { status: 'cancelled' } });
+          await chrome.storage.local.remove([`${storageKey}_crypto`, `${storageKey}_params`, 'activeUnshieldJob', 'activeUnshieldStart']);
+          currentJobStorageKey = null;
+          sendResponse({ success: true });
+          break;
+        }
         case 'SIGN_MESSAGE': {
           const w = getWallet();
           if (!w) { sendResponse({ error: 'locked' }); break; }
@@ -424,36 +468,68 @@ let offscreenCreated = false;
 
 async function ensureOffscreen() {
   if (offscreenCreated) return;
-  // Check if already exists (e.g. from previous run)
-  const contexts = await (chrome.runtime as any).getContexts({ contextTypes: ['OFFSCREEN_DOCUMENT'] });
-  if (contexts && contexts.length > 0) { offscreenCreated = true; return; }
-  await chrome.offscreen.createDocument({
-    url: 'offscreen.html',
-    reasons: [chrome.offscreen.Reason.WORKERS as any],
-    justification: 'PVAC WASM computation for shielded transactions',
-  });
-  // Wait for the offscreen document to signal it's ready
-  await waitForOffscreenReady();
+  try {
+    // Check if already exists
+    if ((chrome.runtime as any).getContexts) {
+      const contexts = await (chrome.runtime as any).getContexts({ contextTypes: ['OFFSCREEN_DOCUMENT'] });
+      if (contexts && contexts.length > 0) { offscreenCreated = true; return; }
+    }
+  } catch { /* getContexts not available, try creating */ }
+
+  try {
+    await chrome.offscreen.createDocument({
+      url: 'offscreen.html',
+      reasons: [chrome.offscreen.Reason.WORKERS as any],
+      justification: 'PVAC WASM computation for shielded transactions',
+    });
+  } catch (e: any) {
+    // "Only a single offscreen document may be created" = already exists, that's fine
+    if (!e.message?.includes('single offscreen')) throw e;
+  }
   offscreenCreated = true;
-}
-
-function waitForOffscreenReady(): Promise<void> {
-  return new Promise((resolve) => {
-    const interval = setInterval(async () => {
-      try {
-        const res = await chrome.runtime.sendMessage({ target: 'offscreen', action: 'ping' });
-        if (res && res.pong) { clearInterval(interval); resolve(); }
-      } catch { /* not ready yet */ }
+  // Wait for the offscreen to connect its port
+  await new Promise<void>((resolve) => {
+    if (offscreenPort) { resolve(); return; }
+    const check = setInterval(() => {
+      if (offscreenPort) { clearInterval(check); resolve(); }
     }, 100);
-    // Safety timeout — resolve anyway after 5s
-    setTimeout(() => { clearInterval(interval); resolve(); }, 5000);
+    // Safety timeout
+    setTimeout(() => { clearInterval(check); resolve(); }, 3000);
   });
 }
 
-// Listen for status updates from the offscreen document
-chrome.runtime.onMessage.addListener((msg) => {
-  if (msg.target === 'background' && msg.jobUpdate && currentJobStorageKey) {
-    chrome.storage.local.set({ [currentJobStorageKey]: { status: 'running', step: msg.jobUpdate } });
+// Listen for port connections from offscreen document
+let offscreenPort: chrome.runtime.Port | null = null;
+
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name === 'offscreen') {
+    offscreenPort = port;
+    port.onMessage.addListener(async (msg) => {
+      if (msg.type === 'jobStatus' && msg.jobId) {
+        await chrome.storage.local.set({ [`job_${msg.jobId}`]: { status: 'running', step: msg.step } });
+      } else if (msg.type === 'cryptoResult' && msg.jobId) {
+        await chrome.storage.local.set({ [`job_${msg.jobId}_crypto`]: msg.data });
+        await chrome.storage.local.set({ [`job_${msg.jobId}`]: { status: 'crypto_done', step: 'Submitting transaction...' } });
+        resumeUnshieldSubmission(msg.jobId);
+      } else if (msg.type === 'jobError' && msg.jobId) {
+        await chrome.storage.local.set({ [`job_${msg.jobId}`]: { status: 'error', error: msg.error } });
+      }
+    });
+    port.onDisconnect.addListener(() => { offscreenPort = null; });
+  }
+});
+
+// Handle cryptoComplete via sendMessage (fallback when port disconnected during computation)
+chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  if (msg.target === 'background' && msg.action === 'cryptoComplete' && msg.jobId) {
+    chrome.storage.local.set({ [`job_${msg.jobId}_crypto`]: msg.data }).then(() =>
+      chrome.storage.local.set({ [`job_${msg.jobId}`]: { status: 'crypto_done', step: 'Submitting transaction...' } })
+    ).then(() => resumeUnshieldSubmission(msg.jobId));
+    sendResponse({ ok: true });
+  }
+  if (msg.target === 'background' && msg.action === 'cryptoError' && msg.jobId) {
+    chrome.storage.local.set({ [`job_${msg.jobId}`]: { status: 'error', error: msg.error } });
+    sendResponse({ ok: true });
   }
 });
 
@@ -484,24 +560,72 @@ async function runUnshieldJob(jobId: string, decAmountRaw: bigint) {
     await update({ step: 'Starting computation engine...' });
     await ensureOffscreen();
 
-    // Send computation to offscreen
+    // Store job params so we can resume after SW wakes
+    await chrome.storage.local.set({ [`job_${jobId}_params`]: {
+      decAmountRaw: String(decAmountRaw),
+      address: w.address,
+    }});
+
+    // Send computation to offscreen via persistent port
     const seed = crypto.getRandomValues(new Uint8Array(32));
     const blinding = crypto.getRandomValues(new Uint8Array(32));
 
-    const cryptoResult = await chrome.runtime.sendMessage({
-      target: 'offscreen',
+    if (!offscreenPort) throw new Error('Offscreen port not connected');
+
+    offscreenPort.postMessage({
       action: 'computeUnshield',
+      jobId,
       currentCipherB64,
       decAmountRaw: String(decAmountRaw),
       seedB64: toBase64(seed),
       blindingB64: toBase64(blinding),
       secretKeyB64: toBase64(w.secretKey.slice(0, 32)),
-    }) as Record<string, string>;
+    });
 
-    if (cryptoResult.error) throw new Error(cryptoResult.error);
+    // Service worker can now die — offscreen + worker will continue independently
+  } catch (err) {
+    await chrome.storage.local.set({ [storageKey]: { status: 'error', error: (err as Error).message } });
+    currentJobStorageKey = null;
+  }
+}
+
+// Resume transaction submission after offscreen writes crypto result to storage
+const SUBMIT_RETRY_DELAY = 5000; // steady 5s between retries
+
+async function resumeUnshieldSubmission(jobId: string, attempt = 0) {
+  const storageKey = `job_${jobId}`;
+  currentJobStorageKey = storageKey;
+  try {
+    // Check if job was cancelled
+    const currentJob = await chrome.storage.local.get(storageKey);
+    if (currentJob[storageKey]?.status === 'cancelled') {
+      currentJobStorageKey = null;
+      return;
+    }
+
+    const w = getWallet();
+    // If wallet is locked, try to get params from storage and wait for unlock
+    if (!w) {
+      await chrome.storage.local.set({ [storageKey]: { status: 'pending_unlock', step: 'Unlock wallet to complete unshield' } });
+      return;
+    }
+
+    const { [`job_${jobId}_crypto`]: cryptoResult, [`job_${jobId}_params`]: params } =
+      await chrome.storage.local.get([`job_${jobId}_crypto`, `job_${jobId}_params`]);
+
+    if (!cryptoResult) {
+      await chrome.storage.local.set({ [storageKey]: { status: 'error', error: 'Crypto result not found' } });
+      return;
+    }
+    if (cryptoResult.error) {
+      await chrome.storage.local.set({ [storageKey]: { status: 'error', error: cryptoResult.error } });
+      return;
+    }
+
+    const decAmountRaw = params?.decAmountRaw ?? '0';
 
     // Build and submit transaction
-    await update({ step: 'Submitting transaction...' });
+    await chrome.storage.local.set({ [storageKey]: { status: 'running', step: `Submitting transaction...${attempt > 0 ? ` (retry ${attempt})` : ''}` } });
     const encData = JSON.stringify({
       cipher: cryptoResult.cipher,
       amount_commitment: cryptoResult.amount_commitment,
@@ -536,8 +660,20 @@ async function runUnshieldJob(jobId: string, decAmountRaw: bigint) {
     };
     const result = await rpc.submitTransaction(tx);
     await chrome.storage.local.set({ [storageKey]: { status: 'done', hash: result.hash } });
+
+    // Clean up intermediate storage
+    await chrome.storage.local.remove([`job_${jobId}_crypto`, `job_${jobId}_params`]);
   } catch (err) {
-    await chrome.storage.local.set({ [storageKey]: { status: 'error', error: (err as Error).message } });
+    const msg = (err as Error).message ?? '';
+    const isTransient = msg.includes('Failed to fetch') || msg.includes('NetworkError') || msg.includes('timeout') || msg.includes('ECONNREFUSED');
+
+    if (isTransient) {
+      await chrome.storage.local.set({ [storageKey]: { status: 'running', step: `Network error, retrying... (attempt ${attempt + 1})` } });
+      setTimeout(() => resumeUnshieldSubmission(jobId, attempt + 1), SUBMIT_RETRY_DELAY);
+      return;
+    }
+
+    await chrome.storage.local.set({ [storageKey]: { status: 'error', error: msg } });
   } finally {
     currentJobStorageKey = null;
   }

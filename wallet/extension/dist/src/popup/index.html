@@ -112,16 +112,22 @@
       <div class="tabs">
         <button class="tab active" data-tab="tokens">Tokens</button>
         <button class="tab" data-tab="activity">Activity</button>
-        <button class="tab" data-tab="send">Send</button>
+        <button class="tab" data-tab="transact">Transact</button>
       </div>
       <div id="tab-tokens" class="tab-content">
         <div id="token-list" class="token-list"><p class="muted">Loading...</p></div>
       </div>
       <div id="tab-activity" class="tab-content hidden">
+        <div id="activity-pending"></div>
         <div id="activity-list" class="activity-list"><p class="muted">Loading...</p></div>
         <a id="explorer-link" href="https://octrascan.io/" target="_blank" rel="noopener" class="explorer-link">View all on OctraScan ↗</a>
       </div>
-      <div id="tab-send" class="tab-content hidden">
+      <div id="tab-transact" class="tab-content hidden">
+        <div class="sub-tabs">
+          <button class="sub-tab" id="btn-shield" data-mode="shield">Shield</button>
+          <button class="sub-tab active" id="btn-send" data-mode="send">Send</button>
+          <button class="sub-tab" id="btn-unshield" data-mode="unshield">Unshield</button>
+        </div>
         <div class="encrypted-balance-row">
           <span class="encrypted-label">Shielded Balance</span>
           <span id="encrypted-balance-display" class="encrypted-value">
@@ -133,11 +139,7 @@
           <div id="send-to-suggestions" class="suggestions hidden"></div>
         </div>
         <input type="text" id="send-amount" placeholder="Amount (OCT)">
-        <div class="send-mode-row">
-          <button id="btn-shield" class="send-mode-btn">Shield</button>
-          <button id="btn-send" class="send-mode-btn active">Send</button>
-          <button id="btn-unshield" class="send-mode-btn">Unshield</button>
-        </div>
+        <button id="btn-submit-action" class="primary" disabled>Confirm</button>
         <div id="send-result" class="result"></div>
       </div>
       <button id="btn-lock" class="link lock-link">Lock Wallet</button>

@@ -134,28 +134,44 @@ When `scale` is set in the request (e.g. `"scale": 1000000`), the value is `raw_
 
 ### Relaying to Octra Contract
 
-1. Fetch attestation from TEE oracle
-2. Convert signature from hex to base64 (Octra's `ed25519_ok` requires base64)
-3. Submit to contract via webcli:
+The relay script (`scripts/relay.py`) signs and submits transactions directly to the Octra RPC — no webcli needed.
 
-```python
-import base64, binascii
-
-sig_hex = attestation["signature"]
-sig_b64 = base64.b64encode(binascii.unhexlify(sig_hex)).decode()
-
-# Call contract
-requests.post("http://127.0.0.1:8420/api/contract/call", json={
-    "address": CONTRACT_ADDR,
-    "method": "update_octra_price",
-    "params": [attestation["price"], attestation["epoch"], sig_b64],
-    "ou": "200000"
-})
+**Required env vars:**
+```bash
+OCTRA_SEED="<12-word mnemonic>"
+ORACLE_URL=http://<ENCLAVE_IP>:8080
+ORACLE_SPEC_FILE=oracle/spec.json
+OCTUSD_CONTRACT=oct2hJMZbBdAAKTBXK61vs1TUx8oQNZVZyEpR4SXGFXgtvE
+OCTRA_RPC_URL=https://octra.network/rpc   # optional, this is the default
 ```
+
+**Run:**
+```bash
+# One-shot
+OCTRA_SEED="..." ORACLE_URL=http://<IP>:8080 ORACLE_SPEC_FILE=oracle/spec.json \
+  OCTUSD_CONTRACT=oct2hJMZbBdAAKTBXK61vs1TUx8oQNZVZyEpR4SXGFXgtvE python3 scripts/relay.py
+
+# Loop mode (every 2 min)
+RELAY_LOOP=1 OCTRA_SEED="..." ORACLE_URL=http://<IP>:8080 \
+  ORACLE_SPEC_FILE=oracle/spec.json \
+  OCTUSD_CONTRACT=oct2hJMZbBdAAKTBXK61vs1TUx8oQNZVZyEpR4SXGFXgtvE python3 scripts/relay.py
+```
+
+**How it works:**
+1. Derives ed25519 keypair from mnemonic (BIP39 → PBKDF2-SHA512 → HMAC-SHA512 with "Octra seed" key → ed25519 seed)
+2. Fetches signed attestation from TEE oracle (raw socket POST to avoid split TCP segments)
+3. Gets current nonce from `octra_balance` RPC
+4. Builds canonical JSON transaction (`op_type: "call"`, `encrypted_data: "update_octra_price"`, `message: [price, timestamp, sig]`)
+5. Signs with ed25519 and submits via `octra_submit` RPC
+
+**Note:** The oracle returns signatures already in base64 format — no hex→base64 conversion needed.
 
 ## Current Deployment Info
 
-- Wallet address: `0x9894d145331254a78666866159c5e16D307f1006`
+- Arbitrum wallet address: `0x9894d145331254a78666866159c5e16D307f1006`
+- Octra wallet address: `octEfXCJva6oTHpvZYf3i2MypeJ2BwHcbe2ziVhnTaWpi9J`
+- OctUSD contract address: `oct2hJMZbBdAAKTBXK61vs1TUx8oQNZVZyEpR4SXGFXgtvE`
+- Octra RPC: `https://octra.network/rpc`
 - Oracle image: `ghcr.io/octane-defi/octusd-oracle:latest`
 - GHCR image (pinned): `ghcr.io/octane-defi/octusd-oracle:sha-4882472`
 - Oracle pubkey (hex): `08791f07b4e40129697f3bd274d02b5db6b19b667fb8e5da86b0e17a72fbaf3e`
@@ -212,3 +228,83 @@ When updating the oracle image (e.g. after code changes):
 11. **Test relay** end-to-end
 
 **Note**: New image = new image ID = new KMS-derived keypair = must redeploy the contract with the new pubkey.
+
+## Step-by-Step: Deploy Oracle & Relay Price
+
+Quick-reference for deploying the oracle and getting a price on-chain. Assumes same image (no pubkey change).
+
+### 1. Deploy the enclave (30 min budget)
+
+```bash
+source .env
+oyster-cvm deploy \
+  --wallet-private-key "${ARBITRUM_PRIVATE_KEY#0x}" \
+  --docker-compose ./oracle/docker-compose.yml \
+  --duration-in-minutes 30 \
+  --region us-east-1 \
+  --arch amd64
+```
+
+Wait ~3 min for boot. Note the IP address from output.
+
+**Important:** The `--wallet-private-key` must NOT have a `0x` prefix (hence the `${VAR#0x}` strip).
+
+### 2. Verify oracle is responding
+
+```bash
+curl -X POST http://<IP>:8080/latest \
+  -H "Content-Type: application/json" \
+  -d @oracle/spec.json
+```
+
+Should return JSON with `value`, `timestamp`, `signature`, `public_key`.
+
+### 3. Run the relay (one-shot)
+
+```bash
+source .env
+OCTRA_SEED="$OCTRA_SEED" \
+ORACLE_URL=http://<IP>:8080 \
+ORACLE_SPEC_FILE=oracle/spec.json \
+OCTUSD_CONTRACT=oct2hJMZbBdAAKTBXK61vs1TUx8oQNZVZyEpR4SXGFXgtvE \
+python3 scripts/relay.py
+```
+
+Expected output includes `TX result: {"tx_hash": "...", "status": "accepted", ...}`.
+
+### 4. Verify on-chain
+
+```bash
+curl -s -X POST https://octra.network/rpc \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"contract_call","params":["oct2hJMZbBdAAKTBXK61vs1TUx8oQNZVZyEpR4SXGFXgtvE","get_octra_price",[],"octEfXCJva6oTHpvZYf3i2MypeJ2BwHcbe2ziVhnTaWpi9J"],"id":1}'
+```
+
+The `oct_usd_price` field in storage should reflect the new value.
+
+### 5. (Optional) Run in loop mode
+
+```bash
+RELAY_LOOP=1 RELAY_INTERVAL=120 \
+OCTRA_SEED="..." ORACLE_URL=http://<IP>:8080 \
+ORACLE_SPEC_FILE=oracle/spec.json \
+OCTUSD_CONTRACT=oct2hJMZbBdAAKTBXK61vs1TUx8oQNZVZyEpR4SXGFXgtvE \
+python3 scripts/relay.py
+```
+
+### 6. Check / stop the job when done
+
+```bash
+# List active jobs
+oyster-cvm list --address 0x9894d145331254a78666866159c5e16D307f1006
+
+# Stop (unreliable — prefer cast jobClose)
+oyster-cvm stop --wallet-private-key <KEY> --job-id <JOB_ID>
+```
+
+### Common Pitfalls
+
+- **Wrong contract address**: The OctUSD contract is at `oct2hJMZbBdAAKTBXK61vs1TUx8oQNZVZyEpR4SXGFXgtvE`, NOT the wallet address.
+- **Job expired**: Oracle jobs have a fixed duration. If the IP is unreachable, the job likely expired — redeploy.
+- **webcli hangs**: Don't use webcli for relay. The relay script signs directly via `pynacl` and submits to `octra_submit` RPC.
+- **Octra RPC URL**: Always use `https://octra.network/rpc`. The old IP `46.101.86.250:8080` is unreliable.
