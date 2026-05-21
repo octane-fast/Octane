@@ -303,27 +303,34 @@ async function loadActivity() {
   const actList = document.getElementById('activity-list')!;
   const pendingEl = document.getElementById('activity-pending')!;
 
-  // Show running unshield job at top (separate element, no flicker on main list)
-  const { activeUnshieldJob, activeUnshieldStart } = await chrome.storage.local.get(['activeUnshieldJob', 'activeUnshieldStart']);
-  if (activeUnshieldJob) {
-    const job = await sendMsg('GET_JOB_STATUS', { jobId: activeUnshieldJob }) as { status: string; step?: string };
+  // Show running jobs at top (separate element, no flicker on main list)
+  const { activeUnshieldJob, activeUnshieldStart, activeShieldJob, activeShieldStart, activeStealthJob, activeStealthStart, activeClaimJob, activeClaimStart } =
+    await chrome.storage.local.get(['activeUnshieldJob', 'activeUnshieldStart', 'activeShieldJob', 'activeShieldStart', 'activeStealthJob', 'activeStealthStart', 'activeClaimJob', 'activeClaimStart']);
+
+  const activeJobId = activeUnshieldJob || activeShieldJob || activeStealthJob || activeClaimJob;
+  const activeStart = activeUnshieldJob ? activeUnshieldStart : activeShieldJob ? activeShieldStart : activeClaimJob ? activeClaimStart : activeStealthStart;
+  const activeLabel = activeUnshieldJob ? 'Unshielding' : activeStealthJob ? 'Stealth Send' : activeClaimJob ? 'Claiming' : 'Shielding';
+  const activeTypeClass = activeUnshieldJob ? 'unshield' : activeStealthJob ? 'stealth' : activeClaimJob ? 'claim' : 'shield';
+
+  if (activeJobId) {
+    const job = await sendMsg('GET_JOB_STATUS', { jobId: activeJobId }) as { status: string; step?: string };
     if (job.status === 'running' || job.status === 'pending_unlock' || job.status === 'crypto_done') {
-      const elapsed = activeUnshieldStart ? Math.floor((Date.now() - activeUnshieldStart) / 1000) : 0;
+      const elapsed = activeStart ? Math.floor((Date.now() - activeStart) / 1000) : 0;
       const timeStr = elapsed < 60 ? `${elapsed}s ago` : `${Math.floor(elapsed / 60)}m ${elapsed % 60}s ago`;
       pendingEl.innerHTML = `<div class="activity-item pending">
-        <div class="activity-row"><span class="activity-type unshield">Unshielding</span><span class="activity-amount">In Progress</span></div>
+        <div class="activity-row"><span class="activity-type ${activeTypeClass}">${activeLabel}</span><span class="activity-amount">In Progress</span></div>
         <div class="activity-row"><span class="activity-addr">${escapeHtml(job.step ?? 'working...')}</span><span class="activity-time">${timeStr}</span></div>
-        <div class="activity-row"><button class="cancel-unshield" data-job="${escapeHtml(activeUnshieldJob)}">Cancel</button></div>
+        <div class="activity-row"><button class="cancel-unshield" data-job="${escapeHtml(activeJobId)}">Cancel</button></div>
       </div>`;
       pendingEl.querySelector('.cancel-unshield')?.addEventListener('click', async (e) => {
         e.stopPropagation();
         const jobId = (e.target as HTMLElement).dataset.job!;
-        await sendMsg('CANCEL_UNSHIELD', { jobId });
-        await chrome.storage.local.remove(['activeUnshieldJob', 'activeUnshieldStart']);
+        await sendMsg('CANCEL_JOB', { jobId });
+        await chrome.storage.local.remove(['activeUnshieldJob', 'activeUnshieldStart', 'activeShieldJob', 'activeShieldStart', 'activeStealthJob', 'activeStealthStart', 'activeClaimJob', 'activeClaimStart']);
         pendingEl.innerHTML = '';
         if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
         const resultEl = document.getElementById('send-result');
-        if (resultEl) resultEl.textContent = 'Unshield cancelled.';
+        if (resultEl) resultEl.textContent = `${activeLabel} cancelled.`;
       });
     } else {
       pendingEl.innerHTML = '';
@@ -369,7 +376,15 @@ async function loadActivity() {
     let typeLabel: string;
     let typeClass: string;
     let counterparty: string;
-    if (opType === 'call') {
+    if (opType === 'encrypt') {
+      typeLabel = 'Shield';
+      typeClass = 'shield';
+      counterparty = to;
+    } else if (opType === 'decrypt') {
+      typeLabel = 'Unshield';
+      typeClass = 'unshield';
+      counterparty = to;
+    } else if (opType === 'call') {
       typeLabel = 'Contract Call';
       typeClass = 'call';
       counterparty = to;
@@ -483,27 +498,34 @@ function showSuggestions(filter: string) {
 
 // Send / Shield / Unshield
 const sendModeButtons = document.querySelectorAll('.sub-tab');
-let sendMode: 'send' | 'shield' | 'unshield' = 'send';
+let sendMode: 'send' | 'shield' | 'unshield' | 'stealth' = 'send';
 const submitBtn = document.getElementById('btn-submit-action') as HTMLButtonElement;
 
 function updateConfirmState() {
   const amount = (document.getElementById('send-amount') as HTMLInputElement).value.trim();
   const to = (document.getElementById('send-to') as HTMLInputElement).value.trim();
-  const filled = sendMode === 'send' ? (!!amount && !!to) : !!amount;
+  const filled = (sendMode === 'send' || sendMode === 'stealth') ? (!!amount && !!to) : !!amount;
   submitBtn.disabled = !filled;
 }
 
 sendModeButtons.forEach(btn => {
   btn.addEventListener('click', () => {
-    const mode = (btn as HTMLElement).dataset.mode as 'send' | 'shield' | 'unshield';
+    const mode = (btn as HTMLElement).dataset.mode as 'send' | 'shield' | 'unshield' | 'stealth';
     sendMode = mode;
     sendModeButtons.forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
     // Show/hide recipient field based on mode
     const toWrap = document.querySelector('.send-to-wrap') as HTMLElement;
-    toWrap.style.display = sendMode === 'send' ? '' : 'none';
+    toWrap.style.display = (sendMode === 'send' || sendMode === 'stealth') ? '' : 'none';
+    // Show/hide shielded balance (only relevant for shield/unshield/stealth)
+    const ebRow = document.querySelector('.encrypted-balance-row') as HTMLElement;
+    ebRow.style.display = (sendMode === 'send') ? 'none' : '';
+    // Show/hide stealth inbox
+    const stealthInbox = document.getElementById('stealth-inbox')!;
+    stealthInbox.classList.toggle('hidden', sendMode !== 'stealth');
     // Update submit button label
-    submitBtn.textContent = sendMode === 'send' ? 'Confirm Send' : sendMode === 'shield' ? 'Confirm Shield' : 'Confirm Unshield';
+    const labels: Record<string, string> = { send: 'Confirm Send', shield: 'Confirm Shield', unshield: 'Confirm Unshield', stealth: 'Confirm Stealth Send' };
+    submitBtn.textContent = labels[sendMode];
     updateConfirmState();
   });
 });
@@ -560,6 +582,17 @@ submitBtn.addEventListener('click', async () => {
       resultEl.innerHTML = txLink(res.hash!, 'Confirmed — View on OctraScan ↗');
       showToast('Transaction sent!');
     }
+  } else if (sendMode === 'stealth') {
+    const to = (document.getElementById('send-to') as HTMLInputElement).value.trim();
+    if (!to || !amount) { showToast('Fill in all fields'); return; }
+    resultEl.textContent = 'Stealth sending...';
+    const res = await sendMsg('STEALTH_SEND', { to, amount }) as { jobId?: string; error?: string };
+    if (res.error) {
+      resultEl.textContent = `Error: ${res.error}`;
+    } else if (res.jobId) {
+      await chrome.storage.local.set({ activeStealthJob: res.jobId, activeStealthStart: Date.now() });
+      pollJobStatus(res.jobId, resultEl, 'stealth');
+    }
   } else {
     await handleShieldAction();
   }
@@ -571,13 +604,12 @@ async function handleShieldAction() {
   const resultEl = document.getElementById('send-result')!;
   if (sendMode === 'shield') {
     resultEl.textContent = 'Shielding...';
-    const res = await sendMsg('ENCRYPT_BALANCE', { amount }) as { hash?: string; error?: string };
+    const res = await sendMsg('ENCRYPT_BALANCE', { amount }) as { jobId?: string; error?: string };
     if (res.error) {
       resultEl.textContent = `Error: ${res.error}`;
-    } else {
-      resultEl.innerHTML = txLink(res.hash!, 'Confirmed — View on OctraScan ↗');
-      showToast('Funds shielded!');
-      fetchEncryptedBalance();
+    } else if (res.jobId) {
+      await chrome.storage.local.set({ activeShieldJob: res.jobId, activeShieldStart: Date.now() });
+      pollJobStatus(res.jobId, resultEl, 'shield');
     }
   } else {
     resultEl.textContent = 'Unshielding...';
@@ -587,7 +619,7 @@ async function handleShieldAction() {
     } else if (res.jobId) {
       // Save job ID + start time and start polling
       await chrome.storage.local.set({ activeUnshieldJob: res.jobId, activeUnshieldStart: Date.now() });
-      pollJobStatus(res.jobId, resultEl);
+      pollJobStatus(res.jobId, resultEl, 'unshield');
     }
   }
 }
@@ -598,48 +630,131 @@ function escapeHtml(str: string): string {
   return div.innerHTML;
 }
 
-// --- Unshield job polling ---
+// --- Job polling (shield + unshield + stealth) ---
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 
-function pollJobStatus(jobId: string, resultEl: HTMLElement) {
-  resultEl.textContent = 'Unshielding — starting...';
+function pollJobStatus(jobId: string, resultEl: HTMLElement, jobType: 'shield' | 'unshield' | 'stealth' | 'claim' = 'unshield') {
+  const label = jobType === 'shield' ? 'Shielding' : jobType === 'stealth' ? 'Stealth sending' : jobType === 'claim' ? 'Claiming' : 'Unshielding';
+  const storageKeys = jobType === 'shield'
+    ? ['activeShieldJob', 'activeShieldStart']
+    : jobType === 'stealth'
+    ? ['activeStealthJob', 'activeStealthStart']
+    : jobType === 'claim'
+    ? ['activeClaimJob', 'activeClaimStart']
+    : ['activeUnshieldJob', 'activeUnshieldStart'];
+
+  resultEl.textContent = `${label} — starting...`;
   if (pollTimer) clearInterval(pollTimer);
   pollTimer = setInterval(async () => {
     const res = await sendMsg('GET_JOB_STATUS', { jobId }) as { status: string; step?: string; hash?: string; error?: string };
     if (res.status === 'running') {
-      resultEl.textContent = `Unshielding — ${res.step ?? 'working...'}`;
+      resultEl.textContent = `${label} — ${res.step ?? 'working...'}`;
     } else if (res.status === 'pending_unlock') {
-      resultEl.textContent = `Unshielding — ${res.step ?? 'waiting for unlock...'}`;
+      resultEl.textContent = `${label} — ${res.step ?? 'waiting for unlock...'}`;
     } else if (res.status === 'crypto_done') {
-      resultEl.textContent = 'Unshielding — submitting transaction...';
+      resultEl.textContent = `${label} — submitting transaction...`;
     } else if (res.status === 'done') {
       clearInterval(pollTimer!);
       pollTimer = null;
-      await chrome.storage.local.remove(['activeUnshieldJob', 'activeUnshieldStart']);
+      await chrome.storage.local.remove(storageKeys);
       resultEl.innerHTML = txLink(res.hash!, 'Confirmed — View on OctraScan ↗');
-      showToast('Funds unshielded!');
+      showToast(jobType === 'shield' ? 'Funds shielded!' : jobType === 'claim' ? 'Stealth funds claimed!' : jobType === 'stealth' ? 'Stealth send complete!' : 'Funds unshielded!');
       fetchEncryptedBalance();
       loadActivity();
     } else if (res.status === 'error') {
       clearInterval(pollTimer!);
       pollTimer = null;
-      await chrome.storage.local.remove(['activeUnshieldJob', 'activeUnshieldStart']);
+      await chrome.storage.local.remove(storageKeys);
       resultEl.textContent = `Error: ${res.error}`;
     } else if (res.status === 'cancelled') {
       clearInterval(pollTimer!);
       pollTimer = null;
-      resultEl.textContent = 'Unshield cancelled.';
+      resultEl.textContent = `${label} cancelled.`;
     }
   }, 2000);
 }
 
-// Check for running unshield job on popup open
+// Check for running jobs on popup open
 async function checkActiveJob() {
-  const { activeUnshieldJob } = await chrome.storage.local.get('activeUnshieldJob');
+  const { activeUnshieldJob, activeShieldJob, activeStealthJob, activeClaimJob } = await chrome.storage.local.get(['activeUnshieldJob', 'activeShieldJob', 'activeStealthJob', 'activeClaimJob']);
+  const resultEl = document.getElementById('send-result')!;
   if (activeUnshieldJob) {
-    const resultEl = document.getElementById('send-result')!;
-    pollJobStatus(activeUnshieldJob, resultEl);
+    pollJobStatus(activeUnshieldJob, resultEl, 'unshield');
+  } else if (activeShieldJob) {
+    pollJobStatus(activeShieldJob, resultEl, 'shield');
+  } else if (activeStealthJob) {
+    pollJobStatus(activeStealthJob, resultEl, 'stealth');
+  } else if (activeClaimJob) {
+    pollJobStatus(activeClaimJob, resultEl, 'claim');
   }
 }
+
+// --- Stealth Inbox: Scan + Claim ---
+document.getElementById('btn-stealth-scan')!.addEventListener('click', async () => {
+  const scanBtn = document.getElementById('btn-stealth-scan') as HTMLButtonElement;
+  const outputsEl = document.getElementById('stealth-outputs')!;
+  scanBtn.disabled = true;
+  scanBtn.textContent = 'Scanning...';
+  outputsEl.innerHTML = '<p class="muted">Scanning...</p>';
+
+  try {
+    const res = await sendMsg('STEALTH_SCAN', {}) as { outputs?: Array<Record<string, unknown>>; error?: string };
+    if (res.error) {
+      outputsEl.innerHTML = `<p class="muted" style="color:#ef4444">${res.error}</p>`;
+      return;
+    }
+    const outputs = res.outputs ?? [];
+    if (outputs.length === 0) {
+      outputsEl.innerHTML = '<p class="muted">No pending stealth payments found.</p>';
+      return;
+    }
+    outputsEl.innerHTML = '';
+    for (const out of outputs) {
+      const item = document.createElement('div');
+      item.className = 'stealth-output-item';
+      const sender = String(out.sender ?? '').slice(0, 12) + '...';
+      item.innerHTML = `
+        <div class="stealth-output-info">
+          <div class="stealth-output-sender" title="${String(out.sender ?? '')}">From: ${sender}</div>
+        </div>
+        <button class="claim-btn" data-id="${out.id}" data-eph="${out.eph_pub}" data-enc="${out.enc_amount}">Claim</button>
+      `;
+      outputsEl.appendChild(item);
+    }
+    // Attach claim handlers
+    outputsEl.querySelectorAll('.claim-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const claimBtn = btn as HTMLButtonElement;
+        const id = claimBtn.dataset.id!;
+        const eph_pub = claimBtn.dataset.eph!;
+        const enc_amount = claimBtn.dataset.enc!;
+        claimBtn.disabled = true;
+        claimBtn.textContent = 'Claiming...';
+        try {
+          const res = await sendMsg('STEALTH_CLAIM', { id, eph_pub, enc_amount }) as { jobId?: string; amount?: string; error?: string };
+          if (res.error) {
+            claimBtn.textContent = 'Error';
+            claimBtn.title = res.error;
+            showToast(`Claim failed: ${res.error}`);
+          } else if (res.jobId) {
+            const amtNum = Number(res.amount ?? 0) / 1_000_000;
+            claimBtn.textContent = `Claiming ${amtNum} OCT...`;
+            await chrome.storage.local.set({ activeClaimJob: res.jobId, activeClaimStart: Date.now() });
+            const resultEl = document.getElementById('send-result') ?? claimBtn.parentElement!;
+            pollJobStatus(res.jobId, resultEl, 'claim');
+          }
+        } catch (err) {
+          claimBtn.textContent = 'Error';
+          showToast('Claim failed');
+        }
+      });
+    });
+  } catch (err) {
+    outputsEl.innerHTML = '<p class="muted" style="color:#ef4444">Scan failed</p>';
+  } finally {
+    scanBtn.disabled = false;
+    scanBtn.textContent = 'Scan';
+  }
+});
 
 init();

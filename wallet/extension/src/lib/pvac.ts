@@ -159,3 +159,18 @@ export function getAesKat(): Uint8Array {
   module._free(outPtr);
   return result;
 }
+
+export function commitCt(cipherData: Uint8Array): Uint8Array {
+  if (!initialized) throw new Error('PVAC not initialized');
+  const ctPtr = module._malloc(cipherData.length);
+  module.HEAPU8.set(cipherData, ctPtr);
+  const outPtr = module._pvac_wasm_commit_ct(ctPtr, cipherData.length);
+  if (!outPtr) {
+    module._free(ctPtr);
+    throw new Error('commit_ct failed');
+  }
+  const result = new Uint8Array(module.HEAPU8.buffer, outPtr, 32).slice();
+  module._pvac_wasm_free(outPtr);
+  module._free(ctPtr);
+  return result;
+}

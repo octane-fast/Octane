@@ -157,4 +157,15 @@ void pvac_wasm_aes_kat(uint8_t out[16]) {
     pvac_aes_kat(out);
 }
 
+// Compute ciphertext commitment (32 bytes)
+EMSCRIPTEN_KEEPALIVE
+uint8_t* pvac_wasm_commit_ct(const uint8_t* cipher_data, int cipher_len) {
+    pvac_cipher ct = pvac_deserialize_cipher(cipher_data, (size_t)cipher_len);
+    if (!ct) return nullptr;
+    uint8_t* out = (uint8_t*)malloc(32);
+    pvac_commit_ct(g_pk, ct, out);
+    pvac_free_cipher(ct);
+    return out;
+}
+
 } // extern "C"

@@ -124,11 +124,12 @@
       </div>
       <div id="tab-transact" class="tab-content hidden">
         <div class="sub-tabs">
-          <button class="sub-tab" id="btn-shield" data-mode="shield">Shield</button>
           <button class="sub-tab active" id="btn-send" data-mode="send">Send</button>
+          <button class="sub-tab" id="btn-shield" data-mode="shield">Shield</button>
+          <button class="sub-tab" id="btn-stealth" data-mode="stealth">Stealth</button>
           <button class="sub-tab" id="btn-unshield" data-mode="unshield">Unshield</button>
         </div>
-        <div class="encrypted-balance-row">
+        <div class="encrypted-balance-row" style="display:none">
           <span class="encrypted-label">Shielded Balance</span>
           <span id="encrypted-balance-display" class="encrypted-value">
             <button id="btn-decrypt-balance" class="decrypt-btn" title="Decrypt shielded balance">Reveal</button>
@@ -141,6 +142,15 @@
         <input type="text" id="send-amount" placeholder="Amount (OCT)">
         <button id="btn-submit-action" class="primary" disabled>Confirm</button>
         <div id="send-result" class="result"></div>
+        <div id="stealth-inbox" class="stealth-inbox hidden">
+          <div class="stealth-inbox-header">
+            <span class="stealth-inbox-title">Stealth Inbox</span>
+            <button id="btn-stealth-scan" class="scan-btn">Scan</button>
+          </div>
+          <div id="stealth-outputs" class="stealth-outputs">
+            <p class="muted">Click Scan to check for incoming stealth payments.</p>
+          </div>
+        </div>
       </div>
       <button id="btn-lock" class="link lock-link">Lock Wallet</button>
     </div>

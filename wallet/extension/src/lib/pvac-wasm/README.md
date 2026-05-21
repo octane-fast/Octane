@@ -46,6 +46,9 @@ pvac-wasm/
 | `src/pvac_c_api.*` | Written for this project | Ours | **Ours** |
 | `src/pvac_serialize.hpp` | Written for this project | Ours | **Ours** |
 | `src/pvac_bindings.cpp` | Written for this project | Ours | **Ours** |
+| `src/stealth_c_api.*` | Adapted from webcli `stealth.hpp` (OpenSSL → tiny-aes GCM + tweetnacl X25519 + inline SHA-256 + ed25519→X25519 field arithmetic) | Ours | **Ours** |
+| `src/stealth_bindings.cpp` | Written for this project | Ours | **Ours** |
+| `src/randombytes.c` | Written for this project (native builds only; emscripten provides its own) | Ours | **Ours** |
 
 ## Patches to Upstream PVAC
 
@@ -97,6 +100,32 @@ Our `src/aes_soft.hpp` is a **thin CTR-mode wrapper** (~50 lines) that:
 - Calls `AES_ECB_encrypt()` from tiny-AES-c for each 16-byte block
 - Implements PVAC's counter format: `[counter_u64_LE | 8 zero bytes]`
 - Exposes PVAC's required `AesCtr256` interface (`init`, `next_u64`, `fill_u64`, `bounded`)
+
+## Stealth Protocol Implementation
+
+The stealth send/scan protocol is implemented in `src/stealth_c_api.cpp`, adapted
+from webcli's `stealth.hpp`. **OpenSSL has been completely removed** and replaced with:
+
+- **X25519 (ECDH):** via vendored `tweetnacl.c` (`crypto_scalarmult`, `crypto_scalarmult_base`)
+- **SHA-256:** inline implementation (from webcli `crypto_utils.hpp`)
+- **AES-256-GCM:** built on top of `tiny-aes-c` ECB + GHASH (inline GF(2^128) multiply)
+- **Ed25519 → X25519 conversion:** field arithmetic (mod 2^255-19) with 16-bit limbs,
+  schoolbook multiplication, and Fermat's little theorem inversion (a^(p-2) mod p)
+
+### WASM Exports (stealth)
+
+| Function | Purpose |
+|----------|---------|
+| `stealth_wasm_prepare_send` | All-in-one send: ECDH + tag + claim_pub + AES-GCM envelope |
+| `stealth_wasm_check_output` | Scan: derive shared → compute tag → compare |
+| `stealth_wasm_decrypt_amount` | Decrypt the AES-GCM envelope to recover amount + blinding |
+
+### tweetnacl
+
+- **Source:** https://tweetnacl.cr.yp.to/ (version 20140427)
+- **License:** Public domain
+- **Status:** Unmodified vendored copy at `vendor/tweetnacl.c` and `vendor/tweetnacl.h`
+- **Used for:** `crypto_scalarmult` (X25519), `crypto_scalarmult_base`, `crypto_hash` (SHA-512)
 
 ## Updating from Upstream
 

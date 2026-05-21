@@ -39,7 +39,11 @@ description: 'Develop, compile, deploy, and interact with smart contracts on the
 ## Webcli
 
 - Binary: `/tmp/webcli/octra_wallet`
-- Start: `octra_wallet --port 8420 --rpc http://46.101.86.250:8080/rpc`
+- **Must run from `/tmp/webcli/`** (serves `static/` UI relative to binary location)
+- Start: `cd /tmp/webcli && ./octra_wallet --port 8420 --data-dir /Users/chriscushman/octra/data`
+- RPC: defaults to `https://octra.network/rpc` (hardcoded fallback was patched from old IP)
+- UI: `http://127.0.0.1:8420` (only works when started from `/tmp/webcli/`)
+- Unlock: `POST /api/wallet/unlock` with `{"file":"data/wallet_EfXCJva6.oct","pin":"123456"}`
 - Import wallet: `POST /api/wallet/import` with `{"mnemonic": "...", "pin": "..."}`
 
 ### Deploy Contract
@@ -100,3 +104,17 @@ Required methods: `transfer`, `grant` (approve), `pull` (transferFrom), `balance
 | Empty compilation result | Used `octra_compileAmlMulti` | Use `octra_compileAml` with inlined code |
 | "invalid oracle signature" | Passed hex sig/pk to `ed25519_ok` | Convert to base64 |
 | Params not reaching contract | Passed params as JSON string | Pass as JSON array |
+| bad_commitment (stealth) | Used pedersen_commit for commitment field | Use commit_ct (ciphertext hash) |
+| invalid_claim_secret (stealth) | Domain strings don't match node protocol | Use exact strings: OCTRA_STEALTH_TAG_V1, OCTRA_CLAIM_SECRET_V1, OCTRA_CLAIM_BIND_V1 |
+
+## Stealth Protocol
+
+Domain separation strings (must match exactly between all clients and node):
+- **Tag**: `"OCTRA_STEALTH_TAG_V1"` — `SHA-256(shared_secret || domain)[0..16]`
+- **Claim secret**: `"OCTRA_CLAIM_SECRET_V1"` — `SHA-256(shared_secret || domain)`
+- **Claim pub**: `"OCTRA_CLAIM_BIND_V1"` — `SHA-256(claim_secret || recipient_addr || domain)`
+
+Stealth send tx: `op_type="stealth"`, `to_="stealth"`, encrypted_data has tag/ephemeral_pub/claim_pub/cipher/commitment/zero_proof.
+Stealth claim tx: `op_type="claim"`, `to_=self_address`, encrypted_data has output_id(integer)/claim_cipher/commitment/claim_secret/zero_proof.
+
+The `commitment` field must be computed via `commit_ct` (ciphertext commitment hash), NOT `pedersen_commit`.

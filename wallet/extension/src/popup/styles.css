@@ -261,6 +261,8 @@ label {
 .activity-type.receive { color: var(--success); }
 .activity-type.call { color: var(--primary); }
 .activity-type.unshield { color: #f59e0b; }
+.activity-type.shield { color: #8b5cf6; }
+.activity-type.stealth { color: #06b6d4; }
 .activity-item.pending { border-color: #f59e0b; background: rgba(245, 158, 11, 0.05); }
 .activity-amount { font-size: 13px; font-weight: 600; }
 .activity-addr { font-size: 11px; color: var(--text-muted); font-family: monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 200px; }
@@ -276,6 +278,21 @@ label {
   text-decoration: none;
 }
 .explorer-link:hover { text-decoration: underline; }
+
+.stealth-inbox { margin-top: 12px; border-top: 1px solid var(--border); padding-top: 10px; }
+.stealth-inbox-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.stealth-inbox-title { font-size: 13px; font-weight: 600; color: #06b6d4; }
+.scan-btn { background: none; border: 1px solid #06b6d4; color: #06b6d4; font-size: 11px; padding: 3px 10px; border-radius: 4px; cursor: pointer; }
+.scan-btn:hover { background: rgba(6, 182, 212, 0.1); }
+.scan-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.stealth-outputs { max-height: 160px; overflow-y: auto; }
+.stealth-output-item { display: flex; justify-content: space-between; align-items: center; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; margin-bottom: 6px; background: var(--surface); }
+.stealth-output-info { font-size: 11px; color: var(--text-muted); overflow: hidden; }
+.stealth-output-amount { font-size: 12px; font-weight: 600; color: #06b6d4; }
+.stealth-output-sender { font-family: monospace; font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 140px; }
+.claim-btn { background: #06b6d4; border: none; color: #fff; font-size: 11px; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-weight: 600; }
+.claim-btn:hover { background: #0891b2; }
+.claim-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .send-to-wrap { position: relative; }
 
