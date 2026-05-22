@@ -162,6 +162,27 @@ document.getElementById('btn-import')!.addEventListener('click', () => {
 document.getElementById('btn-back-setup')!.addEventListener('click', () => showScreen(screenSetup));
 document.getElementById('btn-back-setup2')!.addEventListener('click', () => showScreen(screenSetup));
 
+// Create wallet – enable button when both passwords filled & match
+const createPwInput = document.getElementById('create-password') as HTMLInputElement;
+const createPwConfirm = document.getElementById('create-password-confirm') as HTMLInputElement;
+const btnConfirmCreate = document.getElementById('btn-confirm-create') as HTMLButtonElement;
+function updateCreateState() {
+  btnConfirmCreate.disabled = !(createPwInput.value.length >= 4 && createPwConfirm.value === createPwInput.value);
+}
+createPwInput.addEventListener('input', updateCreateState);
+createPwConfirm.addEventListener('input', updateCreateState);
+
+// Import wallet – enable button when mnemonic + password filled
+const importMnemonicInput = document.getElementById('import-mnemonic') as HTMLTextAreaElement;
+const importPwInput = document.getElementById('import-password') as HTMLInputElement;
+const btnConfirmImport = document.getElementById('btn-confirm-import') as HTMLButtonElement;
+function updateImportState() {
+  const words = importMnemonicInput.value.trim().split(/\s+/);
+  btnConfirmImport.disabled = !(words.length >= 12 && importPwInput.value.length >= 4);
+}
+importMnemonicInput.addEventListener('input', updateImportState);
+importPwInput.addEventListener('input', updateImportState);
+
 // Create wallet
 document.getElementById('btn-confirm-create')!.addEventListener('click', async () => {
   const mnemonic = (document.getElementById('mnemonic-display')! as HTMLElement).dataset.mnemonic!;

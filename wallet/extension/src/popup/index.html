@@ -15,25 +15,25 @@
     <div id="screen-setup" class="screen">
       <svg class="logo logo-large" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg"><rect width="128" height="128" rx="14" fill="#060d1f"/><circle cx="64" cy="64" r="58" fill="none" stroke="rgba(26,86,219,0.15)" stroke-width="0.5"/><circle cx="64" cy="64" r="53" fill="none" stroke="rgba(26,86,219,0.3)" stroke-width="0.5"/><circle cx="64" cy="64" r="48" fill="#1a56db"/><circle cx="64" cy="64" r="48" fill="none" stroke="#1a56db" stroke-width="1.5"/><circle cx="64" cy="64" r="38" fill="#060d1f"/><circle cx="64" cy="64" r="34" fill="none" stroke="rgba(96,165,250,0.4)" stroke-width="0.75"/><g class="flame" transform="translate(64,64) scale(0.42) translate(-196,-200)"><path fill="#fff" d="M196,268 C170,268 152,248 152,224 C152,204 162,192 170,180 C174,174 176,166 174,156 C180,162 184,170 184,180 C184,170 190,154 200,142 C200,154 206,164 214,170 C220,158 218,146 214,136 C226,148 240,168 240,192 C240,204 236,214 228,222 C224,212 222,200 224,190 C216,202 212,218 214,232 C210,226 208,218 208,210 C204,220 202,240 208,254 C204,260 200,264 196,268 Z"/></g></svg>
       <h1>Octane</h1>
-      <button id="btn-create" class="primary">Create New Wallet</button>
-      <button id="btn-import" class="secondary">Import Seed Phrase</button>
-      <div class="tor-toggle">
-        <label class="toggle-row">
-          <span class="toggle-label">Route via Tor</span>
-          <input type="checkbox" id="tor-toggle-setup">
-        </label>
-        <a href="https://www.torproject.org/download/" target="_blank" rel="noopener" class="tor-link">Get Tor ↗</a>
+      <div class="setup-form">
+        <button id="btn-create" class="primary">Create New Wallet</button>
+        <button id="btn-import" class="secondary">Import Seed Phrase</button>
       </div>
-      <div id="tor-status-setup" class="tor-status"></div>
-      <div class="tor-instructions">
-        <p class="tor-instructions-title">How to use Tor privacy:</p>
-        <ol>
+      <div class="tor-section">
+        <div class="tor-section-header">
+          <label class="toggle-row compact">
+            <span class="toggle-label">Route via Tor</span>
+            <input type="checkbox" id="tor-toggle-setup">
+          </label>
+          <a href="https://www.torproject.org/download/" target="_blank" rel="noopener" class="tor-link">Get Tor ↗</a>
+        </div>
+        <ol class="tor-steps">
           <li>Download & open <a href="https://www.torproject.org/download/" target="_blank" rel="noopener">Tor Browser</a></li>
           <li>Keep Tor Browser running in the background</li>
           <li>Enable the toggle above</li>
-          <li>All RPC calls will route through Tor</li>
         </ol>
       </div>
+      <div id="tor-status-setup" class="tor-status"></div>
     </div>
 
     <!-- Create Wallet -->
@@ -41,22 +41,30 @@
       <h2>Your Seed Phrase</h2>
       <div id="mnemonic-display" class="mnemonic-box"></div>
       <p class="warning">Write down these 12 words. Never share them.</p>
-      <label>Password</label>
-      <input type="password" id="create-password" placeholder="Set a password">
-      <label>Confirm</label>
-      <input type="password" id="create-password-confirm" placeholder="Confirm password">
-      <button id="btn-confirm-create" class="primary">Continue</button>
-      <button class="link" id="btn-back-setup">Back</button>
+      <div class="form-group">
+        <label>Password</label>
+        <input type="password" id="create-password" placeholder="Set a password">
+        <label>Confirm</label>
+        <input type="password" id="create-password-confirm" placeholder="Confirm password">
+      </div>
+      <div class="form-actions">
+        <button id="btn-confirm-create" class="primary" disabled>Continue</button>
+        <button class="link" id="btn-back-setup">Back</button>
+      </div>
     </div>
 
     <!-- Import Wallet -->
     <div id="screen-import" class="screen hidden">
       <h2>Import Wallet</h2>
       <textarea id="import-mnemonic" rows="3" placeholder="Enter 12-word seed phrase"></textarea>
-      <label>Password</label>
-      <input type="password" id="import-password" placeholder="Set a password">
-      <button id="btn-confirm-import" class="primary">Import</button>
-      <button class="link" id="btn-back-setup2">Back</button>
+      <div class="form-group">
+        <label>Password</label>
+        <input type="password" id="import-password" placeholder="Set a password">
+      </div>
+      <div class="form-actions">
+        <button id="btn-confirm-import" class="primary" disabled>Import</button>
+        <button class="link" id="btn-back-setup2">Back</button>
+      </div>
     </div>
 
     <!-- Unlock -->
@@ -76,13 +84,13 @@
           </label>
           <a href="https://www.torproject.org/download/" target="_blank" rel="noopener" class="tor-link" id="tor-download-link">Get Tor ↗</a>
         </div>
-        <div id="tor-status" class="tor-status"></div>
         <ol class="tor-steps">
           <li>Download & open <a href="https://www.torproject.org/download/" target="_blank" rel="noopener">Tor Browser</a></li>
           <li>Keep Tor Browser running in the background</li>
           <li>Enable the toggle above</li>
         </ol>
       </div>
+      <div id="tor-status" class="tor-status"></div>
     </div>
 
     <!-- Main Dashboard -->

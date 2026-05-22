@@ -84,10 +84,20 @@ body {
 .unlock-form input { width: 100%; }
 .unlock-form button { width: 100%; }
 
+/* Setup form group */
+.setup-form { display: flex; flex-direction: column; gap: var(--space-sm); width: 100%; margin-bottom: var(--space-lg); }
+.setup-form button { width: 100%; }
+
+/* Onboarding form groups */
+.form-group { display: flex; flex-direction: column; gap: var(--space-xs); width: 100%; }
+.form-group label { font-size: 12px; color: var(--text-muted); }
+.form-actions { display: flex; flex-direction: column; align-items: center; gap: var(--space-xs); width: 100%; margin-top: var(--space-sm); }
+.form-actions button { width: 100%; }
+
 /* Tor section (combined toggle + instructions) */
 .tor-section { width: 100%; background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 12px; }
-.tor-section-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--space-xs); }
-.tor-section .tor-status { margin: var(--space-xs) 0; }
+.tor-section-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--space-sm); }
+
 .tor-steps { padding-left: 16px; font-size: 11px; color: var(--text-dim); display: flex; flex-direction: column; gap: 3px; margin-top: var(--space-xs); }
 .tor-steps a { color: var(--accent); text-decoration: none; }
 .tor-steps a:hover { text-decoration: underline; }
@@ -185,8 +195,10 @@ label { font-size: 11px; font-weight: 500; color: var(--text-muted); margin-top:
 /* Account */
 .account-selector { display: flex; align-items: center; gap: 6px; }
 .account-selector select {
-  flex: 1; padding: 7px 24px 7px 10px; border: 1px solid var(--border); border-radius: var(--radius-md);
-  background: var(--bg-2); color: var(--text); font-size: 12px; cursor: pointer; transition: border-color var(--transition);
+  flex: 1; padding: 7px 28px 7px 10px; border: 1px solid var(--border); border-radius: var(--radius-md);
+  background: var(--bg-2) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%236c6c78'/%3E%3C/svg%3E") no-repeat right 10px center;
+  color: var(--text); font-size: 12px; cursor: pointer; transition: border-color var(--transition);
+  appearance: none; -webkit-appearance: none;
 }
 .account-selector select:focus { outline: none; border-color: var(--primary); }
 
@@ -316,7 +328,6 @@ button.primary:disabled { opacity: 0.4; cursor: not-allowed; }
 @keyframes slideUp { from { opacity: 0; transform: translateX(-50%) translateY(8px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }
 
 /* Tor toggle */
-.tor-toggle { display: flex; align-items: center; justify-content: space-between; margin-top: var(--space-sm); padding: 10px 12px; background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--radius-md); }
 .toggle-row { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 12px; }
 .toggle-label { color: var(--text-muted); font-weight: 400; }
 .toggle-row input[type="checkbox"] { width: 32px; min-width: 32px; height: 18px; appearance: none; -webkit-appearance: none; background: var(--bg-3); border: 1px solid var(--border); border-radius: var(--radius-full); position: relative; cursor: pointer; transition: all var(--transition); flex-shrink: 0; }
@@ -330,15 +341,11 @@ button.primary:disabled { opacity: 0.4; cursor: not-allowed; }
 .toggle-row.compact .toggle-label { color: var(--text-muted); }
 .tor-link { font-size: 11px; color: var(--accent); text-decoration: none; }
 .tor-link:hover { text-decoration: underline; }
-.tor-status { font-size: 11px; text-align: center; min-height: 16px; }
+.tor-status { font-size: 11px; text-align: center; min-height: 16px; margin-top: 6px; }
 .tor-status-checking { color: var(--text-muted); }
 .tor-status-connected { color: var(--success); }
 .tor-status-failed { color: var(--danger); }
-.tor-instructions { background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 12px; font-size: 11px; color: var(--text-dim); }
-.tor-instructions-title { font-weight: 500; color: var(--text-muted); margin-bottom: 6px; font-size: 11px; }
-.tor-instructions ol { padding-left: 16px; display: flex; flex-direction: column; gap: 4px; }
-.tor-instructions a { color: var(--accent); text-decoration: none; }
-.tor-instructions a:hover { text-decoration: underline; }
+
 
 /* Header actions */
 .header-actions { display: flex; align-items: center; gap: var(--space-sm); }
