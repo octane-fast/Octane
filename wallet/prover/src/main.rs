@@ -3,7 +3,7 @@ mod pvac;
 use axum::{
     extract::ws::{Message, WebSocket, WebSocketUpgrade},
     response::IntoResponse,
-    routing::get,
+    routing::{get, post},
     Json, Router,
 };
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
@@ -93,6 +93,7 @@ async fn main() {
     let app = Router::new()
         .route("/health", get(health))
         .route("/prove", get(ws_handler))
+        .route("/decrypt", post(decrypt_handler))
         .layer(CorsLayer::permissive())
         .with_state(state);
 
@@ -111,6 +112,44 @@ async fn health() -> Json<HealthResponse> {
         status: "ready",
         version: "0.1.0",
     })
+}
+
+#[derive(Deserialize)]
+struct DecryptRequest {
+    secret_key_b64: String,
+    cipher_b64: String,
+}
+
+#[derive(Serialize)]
+struct DecryptResponse {
+    value: u64,
+}
+
+async fn decrypt_handler(Json(req): Json<DecryptRequest>) -> Json<serde_json::Value> {
+    let secret_key = match B64.decode(&req.secret_key_b64) {
+        Ok(k) if k.len() >= 32 => k,
+        _ => return Json(serde_json::json!({"error": "invalid secret_key_b64"})),
+    };
+    let cipher = match B64.decode(&req.cipher_b64) {
+        Ok(c) if !c.is_empty() => c,
+        _ => return Json(serde_json::json!({"error": "invalid cipher_b64"})),
+    };
+
+    let key32: [u8; 32] = secret_key[..32].try_into().unwrap();
+    let result = tokio::task::spawn_blocking(move || {
+        let ctx = PvacContext::new(&key32);
+        match ctx {
+            Some(c) => Ok(c.decrypt(&cipher)),
+            None => Err("PVAC init failed"),
+        }
+    })
+    .await;
+
+    match result {
+        Ok(Ok(val)) => Json(serde_json::json!({"value": val})),
+        Ok(Err(e)) => Json(serde_json::json!({"error": e})),
+        Err(e) => Json(serde_json::json!({"error": format!("task error: {e}")})),
+    }
 }
 
 async fn ws_handler(

@@ -21,5 +21,18 @@
   "icons": {
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
-  }
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["dist/content.js"],
+      "run_at": "document_start"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["dist/inpage.js"],
+      "matches": ["<all_urls>"]
+    }
+  ]
 }

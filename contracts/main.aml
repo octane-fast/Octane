@@ -13,6 +13,7 @@ contract OctUSD implements IOCS01 {
     redeem_fee_bps: int
     min_hold_time: int
     total_supply: int
+    max_supply: int
     total_reserve: int
     fee_reserve: int
     balances: map[address]int
@@ -85,6 +86,7 @@ contract OctUSD implements IOCS01 {
     self.redeem_fee_bps = 0
     self.min_hold_time = 0
     self.total_supply = 0
+    self.max_supply = 1000000000000000000
     self.total_reserve = 0
     self.fee_reserve = 0
     self.name = "Octra USD"
@@ -369,6 +371,7 @@ contract OctUSD implements IOCS01 {
   // Minting is blocked if it would violate the system collateral ratio.
   fn mint(): bool {
     require(value > 0, "no OCT sent")
+    require(self.oct_usd_price > 0, "price not set")
     let fee = (value * self.mint_fee_bps) / 10000
     let net_value = value - fee
     let mint_amount = (net_value * self.oct_usd_price) / 1000000
@@ -376,6 +379,7 @@ contract OctUSD implements IOCS01 {
 
     let new_reserve = self.total_reserve + net_value
     let new_supply = self.total_supply + mint_amount
+    require(new_supply <= self.max_supply, "max supply exceeded")
 
     // Safety: block if system would become undercollateralized
     let reserve_usd = (new_reserve * self.oct_usd_price) / 1000000
@@ -396,6 +400,8 @@ contract OctUSD implements IOCS01 {
   fn redeem(amount: int): bool {
     require(amount > 0, "zero amount")
     require(self.balances[caller] >= amount, "insufficient balance")
+    require(self.total_supply >= amount, "supply underflow")
+    require(self.oct_usd_price > 0, "price not set")
     require(epoch >= self.last_mint_time[caller] + self.min_hold_time, "hold time not met")
 
     // oct_to_return = (amount * 10^6) / oct_usd_price
@@ -419,6 +425,7 @@ contract OctUSD implements IOCS01 {
   // --- OCS-01 Token Standard ---
 
   fn transfer(to: address, amount: int): bool {
+    require(amount > 0, "invalid amount")
     let bal = self.balances[caller]
     require(bal >= amount, "insufficient balance")
     require(epoch >= self.last_mint_time[caller] + self.min_hold_time, "hold time not met")
@@ -429,12 +436,14 @@ contract OctUSD implements IOCS01 {
   }
 
   fn grant(spender: address, amount: int): bool {
+    require(amount >= 0, "invalid amount")
     self.grants[caller][spender] = amount
     emit Approval(caller, spender, amount)
     return true
   }
 
   fn pull(from: address, to: address, amount: int): bool {
+    require(amount > 0, "invalid amount")
     let allowed = self.grants[from][caller]
     require(allowed >= amount, "allowance exceeded")
     let bal = self.balances[from]

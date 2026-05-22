@@ -2,7 +2,6 @@
 
 const script = document.createElement('script');
 script.src = chrome.runtime.getURL('dist/inpage.js');
-script.type = 'module';
 (document.head || document.documentElement).appendChild(script);
 script.onload = () => script.remove();
 
@@ -12,7 +11,12 @@ window.addEventListener('message', (event) => {
   if (event.data?.target !== 'octra-content') return;
 
   const { id, method, params } = event.data;
-  chrome.runtime.sendMessage({ type: 'RPC_PASSTHROUGH', payload: { method, params } }, (response) => {
-    window.postMessage({ target: 'octra-inpage', id, response }, '*');
-  });
+  const origin = window.location.origin;
+
+  chrome.runtime.sendMessage(
+    { type: 'DAPP_REQUEST', payload: { method, params, origin } },
+    (response) => {
+      window.postMessage({ target: 'octra-inpage', id, response }, '*');
+    },
+  );
 });

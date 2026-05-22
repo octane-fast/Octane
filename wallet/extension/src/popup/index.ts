@@ -21,9 +21,33 @@ function showScreen(screen: HTMLElement) {
 
 function showToast(msg: string, duration = 2000) {
   const toast = document.getElementById('toast')!;
+  toast.innerHTML = '';
   toast.textContent = msg;
   toast.classList.remove('hidden');
-  setTimeout(() => toast.classList.add('hidden'), duration);
+  if (duration > 0) setTimeout(() => toast.classList.add('hidden'), duration);
+}
+
+function showStealthClaimToast(outputs: Array<Record<string, unknown>>) {
+  const toast = document.getElementById('toast')!;
+  const count = outputs.length;
+  toast.innerHTML = `<span>🔒 ${count} stealth payment${count > 1 ? 's' : ''} available</span><button id="toast-claim-all" class="toast-action">Claim</button>`;
+  toast.classList.remove('hidden');
+  document.getElementById('toast-claim-all')!.addEventListener('click', async () => {
+    toast.innerHTML = '<span>Claiming...</span>';
+    for (const out of outputs) {
+      try {
+        const res = await sendMsg('STEALTH_CLAIM', { id: out.id, eph_pub: out.eph_pub, enc_amount: out.enc_amount }) as { jobId?: string; amount?: string; error?: string };
+        if (res.jobId) {
+          await chrome.storage.local.set({ activeClaimJob: res.jobId, activeClaimStart: Date.now() });
+          const resultEl = document.getElementById('send-result')!;
+          pollJobStatus(res.jobId, resultEl, 'claim');
+        } else if (res.error) {
+          showToast(`Claim failed: ${res.error}`);
+        }
+      } catch { showToast('Claim failed'); }
+    }
+    toast.classList.add('hidden');
+  });
 }
 
 async function sendMsg(type: string, payload: Record<string, unknown> = {}): Promise<unknown> {
@@ -216,32 +240,180 @@ document.querySelectorAll('.tab').forEach(tab => {
     const target = (tab as HTMLElement).dataset.tab!;
     document.querySelectorAll('.tab-content').forEach(c => c.classList.add('hidden'));
     document.getElementById(`tab-${target}`)!.classList.remove('hidden');
-    if (target === 'send') fetchEncryptedBalance();
+
   });
 });
 
 // === Polling Services ===
 // Centralized polling for all live data updates
 
-async function refreshBalance() {
+async function refreshPublicBalance() {
   const balRes = await sendMsg('GET_BALANCE') as { formatted?: string; error?: string };
-  if (balRes.formatted) {
-    document.getElementById('display-balance')!.textContent = `${balRes.formatted} OCT`;
-  }
+  const publicBal = balRes.formatted ?? '0';
+  document.getElementById('display-public-balance')!.textContent = publicBal;
+  const pub = parseFloat(publicBal) || 0;
+  const privEl = document.getElementById('display-private-balance')!;
+  const priv = parseFloat(privEl.textContent || '0') || 0;
+  document.getElementById('display-balance')!.textContent = `${(pub + priv).toFixed(2)} OCT`;
+}
+
+async function refreshPrivateBalance() {
+  const privEl = document.getElementById('display-private-balance')!;
+  try {
+    const privPromise = sendMsg('GET_DECRYPTED_BALANCE') as Promise<{ balance?: string; error?: string }>;
+    const timeout = new Promise<{ error: string }>((resolve) => setTimeout(() => resolve({ error: 'timeout' }), 4000));
+    const privRes = await Promise.race([privPromise, timeout]);
+    if (!privRes.error && privRes.balance !== undefined) {
+      privEl.classList.remove('shimmer');
+      privEl.textContent = privRes.balance;
+      // Update total
+      const pubEl = document.getElementById('display-public-balance')!;
+      const pub = parseFloat(pubEl.textContent || '0') || 0;
+      const priv = parseFloat(privRes.balance) || 0;
+      document.getElementById('display-balance')!.textContent = `${(pub + priv).toFixed(2)} OCT`;
+    }
+  } catch { /* silent */ }
 }
 
 async function refreshTokens() {
-  const balText = document.getElementById('display-balance')!.textContent?.replace(' OCT', '') ?? '0';
   const tokRes = await sendMsg('GET_TOKENS') as { tokens?: Array<{ name: string; symbol: string; balance: string; decimals: number }> };
-  const tokenList = document.getElementById('token-list')!;
-  let html = `<div class="token-item"><div><div class="token-name">Octra</div><div class="token-symbol">OCT</div></div><div class="token-balance">${escapeHtml(balText)}</div></div>`;
-  if (tokRes.tokens && tokRes.tokens.length > 0) {
-    html += tokRes.tokens.map(t => {
-      const bal = (Number(t.balance) / Math.pow(10, t.decimals)).toFixed(t.decimals > 4 ? 4 : t.decimals);
-      return `<div class="token-item"><div><div class="token-name">${escapeHtml(t.name)}</div><div class="token-symbol">${escapeHtml(t.symbol)}</div></div><div class="token-balance">${escapeHtml(bal)}</div></div>`;
-    }).join('');
+
+  // Find octUSD balance from token list (used by swap modal)
+  const octUsd = tokRes.tokens?.find(t => t.symbol === 'octUSD');
+  const octUsdBal = octUsd ? (Number(octUsd.balance) / Math.pow(10, octUsd.decimals)).toFixed(octUsd.decimals > 4 ? 4 : octUsd.decimals) : '0';
+  // Store for swap modal reference
+  (window as any).__octUsdBal = octUsdBal;
+}
+
+// --- octUSD Swap Modal ---
+const OCTUSD_CONTRACT = 'oct2hJMZbBdAAKTBXK61vs1TUx8oQNZVZyEpR4SXGFXgtvE';
+let swapDirection: 'buy' | 'sell' = 'buy';
+let octUsdPrice = 0; // raw int from contract (e.g. 56877 means $0.056877/OCT)
+
+async function fetchOctUsdPrice(): Promise<number> {
+  const res = await sendMsg('RPC_PASSTHROUGH', { method: 'contract_call', params: [OCTUSD_CONTRACT, 'get_octra_price', [], ''] }) as { result?: number; error?: string };
+  if (res.result !== undefined) {
+    octUsdPrice = Number(res.result);
   }
-  tokenList.innerHTML = html;
+  return octUsdPrice;
+}
+
+function openSwapModal() {
+  const modal = document.getElementById('swap-modal')!;
+  modal.classList.remove('hidden');
+  swapDirection = 'buy';
+  updateSwapTabs();
+  (document.getElementById('swap-input') as HTMLInputElement).value = '';
+  document.getElementById('swap-preview')!.textContent = '';
+  document.getElementById('swap-result')!.textContent = '';
+  (document.getElementById('btn-swap-confirm') as HTMLButtonElement).disabled = true;
+  // Fetch price
+  document.getElementById('swap-rate')!.textContent = 'Loading rate...';
+  fetchOctUsdPrice().then(p => {
+    if (p > 0) {
+      const priceUsd = (p / 1_000_000).toFixed(6);
+      document.getElementById('swap-rate')!.textContent = `1 OCT = ${priceUsd} octUSD`;
+    } else {
+      document.getElementById('swap-rate')!.textContent = 'Could not fetch price';
+    }
+  });
+}
+
+function updateSwapTabs() {
+  document.querySelectorAll('.swap-tab').forEach(t => {
+    t.classList.toggle('active', (t as HTMLElement).dataset.dir === swapDirection);
+  });
+  const label = document.getElementById('swap-input-label')!;
+  const input = document.getElementById('swap-input') as HTMLInputElement;
+  if (swapDirection === 'buy') {
+    label.textContent = 'You pay (OCT)';
+    input.placeholder = '0.00';
+  } else {
+    label.textContent = 'You sell (octUSD)';
+    input.placeholder = '0.00';
+  }
+  document.getElementById('swap-preview')!.textContent = '';
+  input.value = '';
+  (document.getElementById('btn-swap-confirm') as HTMLButtonElement).disabled = true;
+}
+
+document.getElementById('swap-close')!.addEventListener('click', () => {
+  document.getElementById('swap-modal')!.classList.add('hidden');
+});
+
+document.querySelectorAll('.swap-tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    swapDirection = (tab as HTMLElement).dataset.dir as 'buy' | 'sell';
+    updateSwapTabs();
+  });
+});
+
+document.getElementById('swap-input')!.addEventListener('input', () => {
+  const val = (document.getElementById('swap-input') as HTMLInputElement).value.trim();
+  const num = parseFloat(val);
+  const preview = document.getElementById('swap-preview')!;
+  const btn = document.getElementById('btn-swap-confirm') as HTMLButtonElement;
+  if (!val || isNaN(num) || num <= 0 || octUsdPrice <= 0) {
+    preview.textContent = '';
+    btn.disabled = true;
+    return;
+  }
+  btn.disabled = false;
+  if (swapDirection === 'buy') {
+    // Paying OCT, receiving octUSD: mint_amount = (oct_raw * price) / 1e6
+    const octUsdReceived = (num * octUsdPrice) / 1_000_000;
+    preview.textContent = `≈ ${octUsdReceived.toFixed(4)} octUSD`;
+  } else {
+    // Selling octUSD, receiving OCT: oct = (amount * 1e6) / price
+    const octReceived = (num * 1_000_000) / octUsdPrice;
+    preview.textContent = `≈ ${octReceived.toFixed(6)} OCT`;
+  }
+});
+
+document.getElementById('btn-swap-confirm')!.addEventListener('click', async () => {
+  const btn = document.getElementById('btn-swap-confirm') as HTMLButtonElement;
+  const resultEl = document.getElementById('swap-result')!;
+  const val = (document.getElementById('swap-input') as HTMLInputElement).value.trim();
+  const num = parseFloat(val);
+  if (!val || isNaN(num) || num <= 0) return;
+
+  btn.disabled = true;
+  btn.textContent = 'Submitting...';
+  resultEl.textContent = '';
+
+  try {
+    let res: { hash?: string; error?: string };
+    if (swapDirection === 'buy') {
+      // mint: send OCT to contract
+      res = await sendMsg('SWAP_OCTUSD', { direction: 'buy', amount: val }) as { hash?: string; error?: string };
+    } else {
+      // redeem: burn octUSD
+      res = await sendMsg('SWAP_OCTUSD', { direction: 'sell', amount: val }) as { hash?: string; error?: string };
+    }
+    if (res.error) {
+      resultEl.textContent = res.error;
+      resultEl.style.color = 'var(--error, #ef4444)';
+    } else {
+      resultEl.textContent = `Success! TX: ${res.hash?.slice(0, 12)}…`;
+      resultEl.style.color = 'var(--success, #22c55e)';
+      (document.getElementById('swap-input') as HTMLInputElement).value = '';
+      document.getElementById('swap-preview')!.textContent = '';
+    }
+  } catch (err) {
+    resultEl.textContent = (err as Error).message ?? 'Unknown error';
+    resultEl.style.color = 'var(--error, #ef4444)';
+  }
+  btn.textContent = 'Confirm Swap';
+  btn.disabled = false;
+});
+
+async function scanForStealthPayments() {
+  try {
+    const res = await sendMsg('STEALTH_SCAN', {}) as { outputs?: Array<Record<string, unknown>>; error?: string };
+    if (res.outputs && res.outputs.length > 0) {
+      showStealthClaimToast(res.outputs);
+    }
+  } catch { /* silent */ }
 }
 
 const PollingService = {
@@ -249,13 +421,19 @@ const PollingService = {
 
   start() {
     this.stop(); // Clear any existing timers
-    // Balance + tokens: every 3s
+    // Public balance + tokens: every 3s (fast, no PVAC)
     this.timers.push(setInterval(async () => {
-      await refreshBalance();
+      await refreshPublicBalance();
       await refreshTokens();
     }, 3000));
-    // Activity: every 1s
-    this.timers.push(setInterval(() => loadActivity(), 1000));
+    // Private balance: every 10s (may be slow due to PVAC)
+    this.timers.push(setInterval(() => { refreshPrivateBalance(); }, 10000));
+    refreshPrivateBalance(); // fire immediately
+    // Activity: every 10s
+    this.timers.push(setInterval(() => loadActivity(), 10000));
+    // Stealth scan: every 30s
+    scanForStealthPayments();
+    this.timers.push(setInterval(() => scanForStealthPayments(), 30000));
   },
 
   stop() {
@@ -286,20 +464,24 @@ async function loadMainScreen() {
   addrEl.setAttribute('data-full', fullAddr);
   addrEl.textContent = fullAddr.slice(0, 12) + '…' + fullAddr.slice(-10);
 
-  // Initial data load
-  await refreshBalance();
+  // Initial data load — fetch public balance + tokens immediately, private balance async
+  await refreshPublicBalance();
   await refreshTokens();
   await loadActivity();
 
-  // Start polling services
+  // Start polling services (includes private balance)
   PollingService.start();
 }
 
 // In-memory activity cache, keyed by tx_hash for deduplication
 const activityCache = new Map<string, Record<string, unknown>>();
 let lastActivityHtml = '';
+let activityLoading = false;
 
 async function loadActivity() {
+  if (activityLoading) return;
+  activityLoading = true;
+  try {
   const actList = document.getElementById('activity-list')!;
   const pendingEl = document.getElementById('activity-pending')!;
 
@@ -417,6 +599,7 @@ async function loadActivity() {
       });
     });
   }
+  } finally { activityLoading = false; }
 }
 
 // Switch account
@@ -497,94 +680,53 @@ function showSuggestions(filter: string) {
 }
 
 // Send / Shield / Unshield
-const sendModeButtons = document.querySelectorAll('.sub-tab');
-let sendMode: 'send' | 'shield' | 'unshield' | 'stealth' = 'send';
-const submitBtn = document.getElementById('btn-submit-action') as HTMLButtonElement;
+let sendMode: 'send' | 'stealth' = 'send';
+const submitSendBtn = document.getElementById('btn-submit-send') as HTMLButtonElement;
+const submitShieldBtn = document.getElementById('btn-submit-shield') as HTMLButtonElement;
+const submitUnshieldBtn = document.getElementById('btn-submit-unshield') as HTMLButtonElement;
+const stealthToggleInput = document.getElementById('stealth-toggle-input') as HTMLInputElement;
 
-function updateConfirmState() {
+function updateSendState() {
   const amount = (document.getElementById('send-amount') as HTMLInputElement).value.trim();
   const to = (document.getElementById('send-to') as HTMLInputElement).value.trim();
-  const filled = (sendMode === 'send' || sendMode === 'stealth') ? (!!amount && !!to) : !!amount;
-  submitBtn.disabled = !filled;
+  submitSendBtn.disabled = !(amount && to);
 }
 
-sendModeButtons.forEach(btn => {
-  btn.addEventListener('click', () => {
-    const mode = (btn as HTMLElement).dataset.mode as 'send' | 'shield' | 'unshield' | 'stealth';
-    sendMode = mode;
-    sendModeButtons.forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-    // Show/hide recipient field based on mode
-    const toWrap = document.querySelector('.send-to-wrap') as HTMLElement;
-    toWrap.style.display = (sendMode === 'send' || sendMode === 'stealth') ? '' : 'none';
-    // Show/hide shielded balance (only relevant for shield/unshield/stealth)
-    const ebRow = document.querySelector('.encrypted-balance-row') as HTMLElement;
-    ebRow.style.display = (sendMode === 'send') ? 'none' : '';
-    // Show/hide stealth inbox
-    const stealthInbox = document.getElementById('stealth-inbox')!;
-    stealthInbox.classList.toggle('hidden', sendMode !== 'stealth');
-    // Update submit button label
-    const labels: Record<string, string> = { send: 'Confirm Send', shield: 'Confirm Shield', unshield: 'Confirm Unshield', stealth: 'Confirm Stealth Send' };
-    submitBtn.textContent = labels[sendMode];
-    updateConfirmState();
-  });
+function updateShieldState() {
+  const amount = (document.getElementById('shield-amount') as HTMLInputElement).value.trim();
+  submitShieldBtn.disabled = !amount;
+}
+
+function updateUnshieldState() {
+  const amount = (document.getElementById('unshield-amount') as HTMLInputElement).value.trim();
+  submitUnshieldBtn.disabled = !amount;
+}
+
+// Stealth toggle switch
+stealthToggleInput.addEventListener('change', () => {
+  if (stealthToggleInput.checked) {
+    sendMode = 'stealth';
+    submitSendBtn.textContent = 'Confirm Stealth Send';
+  } else {
+    sendMode = 'send';
+    submitSendBtn.textContent = 'Confirm Send';
+  }
 });
 
 // Validate inputs on typing
-document.getElementById('send-amount')!.addEventListener('input', updateConfirmState);
-document.getElementById('send-to')!.addEventListener('input', updateConfirmState);
+document.getElementById('send-amount')!.addEventListener('input', updateSendState);
+document.getElementById('send-to')!.addEventListener('input', updateSendState);
+document.getElementById('shield-amount')!.addEventListener('input', updateShieldState);
+document.getElementById('unshield-amount')!.addEventListener('input', updateUnshieldState);
 
-async function fetchEncryptedBalance() {
-  const el = document.getElementById('encrypted-balance-display')!;
-  // Check if there's an encrypted balance, show reveal button
-  const res = await sendMsg('GET_ENCRYPTED_BALANCE') as { encryptedBalance?: { cipher?: string }; error?: string };
-  if (res.error) {
-    el.textContent = '0 OCT';
-  } else {
-    const cipher = (res.encryptedBalance as { cipher?: string })?.cipher;
-    if (!cipher || cipher === '0') {
-      el.textContent = '0 OCT';
-    } else {
-      el.innerHTML = '<button id="btn-decrypt-balance" class="decrypt-btn" title="Decrypt shielded balance">Reveal</button>';
-      document.getElementById('btn-decrypt-balance')!.addEventListener('click', revealShieldedBalance);
-    }
-  }
-}
-
-async function revealShieldedBalance() {
-  const el = document.getElementById('encrypted-balance-display')!;
-  const btn = document.getElementById('btn-decrypt-balance') as HTMLButtonElement | null;
-  if (btn) { btn.disabled = true; btn.textContent = 'Decrypting...'; }
-  const res = await sendMsg('GET_DECRYPTED_BALANCE') as { balance?: string; error?: string };
-  if (res.error) {
-    el.textContent = 'Error';
-  } else {
-    el.textContent = `${res.balance ?? '0'} OCT`;
-  }
-}
-
-// Bind initial decrypt button from HTML
-document.getElementById('btn-decrypt-balance')?.addEventListener('click', revealShieldedBalance);
-
-// Single submit handler based on current mode
-submitBtn.addEventListener('click', async () => {
+// Send submit handler
+submitSendBtn.addEventListener('click', async () => {
   const amount = (document.getElementById('send-amount') as HTMLInputElement).value.trim();
+  const to = (document.getElementById('send-to') as HTMLInputElement).value.trim();
   const resultEl = document.getElementById('send-result')!;
+  if (!to || !amount) { showToast('Fill in all fields'); return; }
 
-  if (sendMode === 'send') {
-    const to = (document.getElementById('send-to') as HTMLInputElement).value.trim();
-    if (!to || !amount) { showToast('Fill in all fields'); return; }
-    resultEl.textContent = 'Sending...';
-    const res = await sendMsg('SEND_TRANSACTION', { to, amount }) as { hash?: string; error?: string };
-    if (res.error) {
-      resultEl.textContent = `Error: ${res.error}`;
-    } else {
-      resultEl.innerHTML = txLink(res.hash!, 'Confirmed — View on OctraScan ↗');
-      showToast('Transaction sent!');
-    }
-  } else if (sendMode === 'stealth') {
-    const to = (document.getElementById('send-to') as HTMLInputElement).value.trim();
-    if (!to || !amount) { showToast('Fill in all fields'); return; }
+  if (sendMode === 'stealth') {
     resultEl.textContent = 'Stealth sending...';
     const res = await sendMsg('STEALTH_SEND', { to, amount }) as { jobId?: string; error?: string };
     if (res.error) {
@@ -594,35 +736,46 @@ submitBtn.addEventListener('click', async () => {
       pollJobStatus(res.jobId, resultEl, 'stealth');
     }
   } else {
-    await handleShieldAction();
+    resultEl.textContent = 'Sending...';
+    const res = await sendMsg('SEND_TRANSACTION', { to, amount }) as { hash?: string; error?: string };
+    if (res.error) {
+      resultEl.textContent = `Error: ${res.error}`;
+    } else {
+      resultEl.innerHTML = txLink(res.hash!, 'Confirmed — View on OctraScan ↗');
+      showToast('Transaction sent!');
+    }
   }
 });
 
-async function handleShieldAction() {
-  const amount = (document.getElementById('send-amount') as HTMLInputElement).value.trim();
+// Shield submit handler
+submitShieldBtn.addEventListener('click', async () => {
+  const amount = (document.getElementById('shield-amount') as HTMLInputElement).value.trim();
   if (!amount) { showToast('Enter an amount'); return; }
-  const resultEl = document.getElementById('send-result')!;
-  if (sendMode === 'shield') {
-    resultEl.textContent = 'Shielding...';
-    const res = await sendMsg('ENCRYPT_BALANCE', { amount }) as { jobId?: string; error?: string };
-    if (res.error) {
-      resultEl.textContent = `Error: ${res.error}`;
-    } else if (res.jobId) {
-      await chrome.storage.local.set({ activeShieldJob: res.jobId, activeShieldStart: Date.now() });
-      pollJobStatus(res.jobId, resultEl, 'shield');
-    }
-  } else {
-    resultEl.textContent = 'Unshielding...';
-    const res = await sendMsg('DECRYPT_BALANCE', { amount }) as { jobId?: string; error?: string };
-    if (res.error) {
-      resultEl.textContent = `Error: ${res.error}`;
-    } else if (res.jobId) {
-      // Save job ID + start time and start polling
-      await chrome.storage.local.set({ activeUnshieldJob: res.jobId, activeUnshieldStart: Date.now() });
-      pollJobStatus(res.jobId, resultEl, 'unshield');
-    }
+  const resultEl = document.getElementById('shield-result')!;
+  resultEl.textContent = 'Shielding...';
+  const res = await sendMsg('ENCRYPT_BALANCE', { amount }) as { jobId?: string; error?: string };
+  if (res.error) {
+    resultEl.textContent = `Error: ${res.error}`;
+  } else if (res.jobId) {
+    await chrome.storage.local.set({ activeShieldJob: res.jobId, activeShieldStart: Date.now() });
+    pollJobStatus(res.jobId, resultEl, 'shield');
   }
-}
+});
+
+// Unshield submit handler
+submitUnshieldBtn.addEventListener('click', async () => {
+  const amount = (document.getElementById('unshield-amount') as HTMLInputElement).value.trim();
+  if (!amount) { showToast('Enter an amount'); return; }
+  const resultEl = document.getElementById('unshield-result')!;
+  resultEl.textContent = 'Unshielding...';
+  const res = await sendMsg('DECRYPT_BALANCE', { amount }) as { jobId?: string; error?: string };
+  if (res.error) {
+    resultEl.textContent = `Error: ${res.error}`;
+  } else if (res.jobId) {
+    await chrome.storage.local.set({ activeUnshieldJob: res.jobId, activeUnshieldStart: Date.now() });
+    pollJobStatus(res.jobId, resultEl, 'unshield');
+  }
+});
 
 function escapeHtml(str: string): string {
   const div = document.createElement('div');
@@ -659,7 +812,6 @@ function pollJobStatus(jobId: string, resultEl: HTMLElement, jobType: 'shield' |
       await chrome.storage.local.remove(storageKeys);
       resultEl.innerHTML = txLink(res.hash!, 'Confirmed — View on OctraScan ↗');
       showToast(jobType === 'shield' ? 'Funds shielded!' : jobType === 'claim' ? 'Stealth funds claimed!' : jobType === 'stealth' ? 'Stealth send complete!' : 'Funds unshielded!');
-      fetchEncryptedBalance();
       loadActivity();
     } else if (res.status === 'error') {
       clearInterval(pollTimer!);
@@ -688,73 +840,5 @@ async function checkActiveJob() {
     pollJobStatus(activeClaimJob, resultEl, 'claim');
   }
 }
-
-// --- Stealth Inbox: Scan + Claim ---
-document.getElementById('btn-stealth-scan')!.addEventListener('click', async () => {
-  const scanBtn = document.getElementById('btn-stealth-scan') as HTMLButtonElement;
-  const outputsEl = document.getElementById('stealth-outputs')!;
-  scanBtn.disabled = true;
-  scanBtn.textContent = 'Scanning...';
-  outputsEl.innerHTML = '<p class="muted">Scanning...</p>';
-
-  try {
-    const res = await sendMsg('STEALTH_SCAN', {}) as { outputs?: Array<Record<string, unknown>>; error?: string };
-    if (res.error) {
-      outputsEl.innerHTML = `<p class="muted" style="color:#ef4444">${res.error}</p>`;
-      return;
-    }
-    const outputs = res.outputs ?? [];
-    if (outputs.length === 0) {
-      outputsEl.innerHTML = '<p class="muted">No pending stealth payments found.</p>';
-      return;
-    }
-    outputsEl.innerHTML = '';
-    for (const out of outputs) {
-      const item = document.createElement('div');
-      item.className = 'stealth-output-item';
-      const sender = String(out.sender ?? '').slice(0, 12) + '...';
-      item.innerHTML = `
-        <div class="stealth-output-info">
-          <div class="stealth-output-sender" title="${String(out.sender ?? '')}">From: ${sender}</div>
-        </div>
-        <button class="claim-btn" data-id="${out.id}" data-eph="${out.eph_pub}" data-enc="${out.enc_amount}">Claim</button>
-      `;
-      outputsEl.appendChild(item);
-    }
-    // Attach claim handlers
-    outputsEl.querySelectorAll('.claim-btn').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        const claimBtn = btn as HTMLButtonElement;
-        const id = claimBtn.dataset.id!;
-        const eph_pub = claimBtn.dataset.eph!;
-        const enc_amount = claimBtn.dataset.enc!;
-        claimBtn.disabled = true;
-        claimBtn.textContent = 'Claiming...';
-        try {
-          const res = await sendMsg('STEALTH_CLAIM', { id, eph_pub, enc_amount }) as { jobId?: string; amount?: string; error?: string };
-          if (res.error) {
-            claimBtn.textContent = 'Error';
-            claimBtn.title = res.error;
-            showToast(`Claim failed: ${res.error}`);
-          } else if (res.jobId) {
-            const amtNum = Number(res.amount ?? 0) / 1_000_000;
-            claimBtn.textContent = `Claiming ${amtNum} OCT...`;
-            await chrome.storage.local.set({ activeClaimJob: res.jobId, activeClaimStart: Date.now() });
-            const resultEl = document.getElementById('send-result') ?? claimBtn.parentElement!;
-            pollJobStatus(res.jobId, resultEl, 'claim');
-          }
-        } catch (err) {
-          claimBtn.textContent = 'Error';
-          showToast('Claim failed');
-        }
-      });
-    });
-  } catch (err) {
-    outputsEl.innerHTML = '<p class="muted" style="color:#ef4444">Scan failed</p>';
-  } finally {
-    scanBtn.disabled = false;
-    scanBtn.textContent = 'Scan';
-  }
-});
 
 init();

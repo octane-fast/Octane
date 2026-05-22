@@ -147,6 +147,77 @@ async function ensurePublicKeyRegistered(
   await rpc.registerPublicKey(address, toBase64(publicKey), toBase64(sig));
 }
 
+// --- Unlock prompt for dApp requests ---
+const unlockWaiters: Array<(unlocked: boolean) => void> = [];
+
+function notifyUnlockWaiters() {
+  while (unlockWaiters.length) unlockWaiters.pop()!(true);
+}
+
+async function ensureUnlocked(): Promise<boolean> {
+  if (unlockedMnemonic) return true;
+  // Open popup so user can enter password
+  const popupUrl = chrome.runtime.getURL('dist/src/popup/index.html?unlock=dapp');
+  chrome.windows.create({
+    url: popupUrl,
+    type: 'popup',
+    width: 380,
+    height: 540,
+    focused: true,
+  });
+  // Wait up to 2 minutes for unlock
+  return new Promise<boolean>((resolve) => {
+    unlockWaiters.push(resolve);
+    setTimeout(() => {
+      const idx = unlockWaiters.indexOf(resolve);
+      if (idx >= 0) {
+        unlockWaiters.splice(idx, 1);
+        resolve(false);
+      }
+    }, 120_000);
+  });
+}
+
+// --- dApp approval popup infrastructure ---
+interface PendingApprovalEntry {
+  resolve: (approved: boolean) => void;
+}
+const pendingApprovals = new Map<string, PendingApprovalEntry>();
+
+async function requestUserApproval(
+  type: 'connect' | 'sign_message' | 'send_transaction' | 'call_contract',
+  origin: string,
+  data: Record<string, unknown>,
+): Promise<boolean> {
+  const id = crypto.randomUUID();
+  const storageKey = `approval_${id}`;
+  await chrome.storage.local.set({ [storageKey]: { id, type, origin, data } });
+
+  const confirmUrl = chrome.runtime.getURL(`dist/src/popup/confirm.html?id=${id}`);
+  chrome.windows.create({
+    url: confirmUrl,
+    type: 'popup',
+    width: 400,
+    height: 420,
+    focused: true,
+  });
+
+  return new Promise<boolean>((resolve) => {
+    pendingApprovals.set(id, { resolve });
+    // Auto-reject after 2 minutes if no response
+    setTimeout(() => {
+      if (pendingApprovals.has(id)) {
+        pendingApprovals.delete(id);
+        chrome.storage.local.remove(storageKey);
+        resolve(false);
+      }
+    }, 120_000);
+  });
+}
+
+// Track approved origins to skip repeat confirmations for connect
+const approvedOrigins = new Set<string>();
+
 type MessageHandler = (
   message: Record<string, unknown>,
   sender: chrome.runtime.MessageSender,
@@ -161,16 +232,37 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
   (async () => {
     try {
       switch (type) {
+        case 'APPROVAL_RESPONSE': {
+          const { id: approvalId, approved } = payload as { id: string; approved: boolean };
+          const entry = pendingApprovals.get(approvalId);
+          if (entry) {
+            pendingApprovals.delete(approvalId);
+            chrome.storage.local.remove(`approval_${approvalId}`);
+            entry.resolve(approved);
+          }
+          sendResponse({ ok: true });
+          break;
+        }
         case 'UNLOCK': {
           const { encryptedSeed, password, hdIndex } = payload as { encryptedSeed: string; password: string; hdIndex?: number };
           unlockedMnemonic = await decryptMnemonic(encryptedSeed, password);
           activeHdIndex = hdIndex ?? 0;
           resetLockTimer();
           sendResponse({ success: true });
+          // Notify any dApp requests waiting for unlock
+          notifyUnlockWaiters();
           // Auto-register public key on-chain (fire-and-forget)
           {
             const w = getWallet();
-            if (w) ensurePublicKeyRegistered(w.address, w.secretKey, w.publicKey).catch(() => {});
+            if (w) {
+              ensurePublicKeyRegistered(w.address, w.secretKey, w.publicKey).catch(() => {});
+              // Eagerly start offscreen + warm up PVAC WASM so decrypt is instant
+              ensureOffscreen().then(() => {
+                if (offscreenPort) {
+                  offscreenPort.postMessage({ action: 'warmup', secretKeyB64: toBase64(w.secretKey.slice(0, 32)) });
+                }
+              }).catch(() => {});
+            }
           }
           // Resume any pending_unlock jobs now that wallet is unlocked
           chrome.storage.local.get(null).then((all) => {
@@ -288,12 +380,7 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
           const w = getWallet();
           if (!w) { sendResponse({ error: 'locked' }); break; }
           try {
-            // Init PVAC if needed
-            if (!isInitialized()) {
-              const ok = await initPvac(w.secretKey.slice(0, 32));
-              if (!ok) { sendResponse({ error: 'PVAC init failed' }); break; }
-            }
-            // Fetch encrypted balance
+            // Fetch encrypted balance from chain
             const ebMsg = new TextEncoder().encode(`octra_encryptedBalance|${w.address}`);
             const ebSig = sign(ebMsg, w.secretKey);
             const ebResult = await rpc.getEncryptedBalance(w.address, toBase64(ebSig), toBase64(w.publicKey)) as Record<string, unknown>;
@@ -301,10 +388,36 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
             if (!cipherStr || cipherStr === '0') {
               sendResponse({ balance: '0' }); break;
             }
-            // Decode cipher (strip "hfhe_v1|" prefix)
+            // Strip "hfhe_v1|" prefix
             const cipherB64 = cipherStr.startsWith('hfhe_v1|') ? cipherStr.slice(8) : cipherStr;
-            const cipherBytes = fromBase64(cipherB64);
-            const rawValue = decryptValue(cipherBytes);
+            const secretKeyB64 = toBase64(w.secretKey.slice(0, 32));
+
+            // Try native prover first (fast, already initialized)
+            let rawValue: bigint | null = null;
+            if (await isProverAvailable()) {
+              try {
+                const ctrl = new AbortController();
+                const timer = setTimeout(() => ctrl.abort(), 3000);
+                const res = await fetch(`${PROVER_URL}/decrypt`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ secret_key_b64: secretKeyB64, cipher_b64: cipherB64 }),
+                  signal: ctrl.signal,
+                });
+                clearTimeout(timer);
+                const data = await res.json() as { value?: number; error?: string };
+                if (data.value !== undefined) rawValue = BigInt(data.value);
+              } catch { /* fall through to offscreen */ }
+            }
+
+            // Fallback: offscreen WASM worker
+            if (rawValue === null) {
+              await ensureOffscreen();
+              const decResult = await chrome.runtime.sendMessage({ target: 'offscreen', action: 'decrypt', secretKeyB64, cipherB64 }) as { value?: string; error?: string };
+              if (decResult.error) { sendResponse({ error: decResult.error }); break; }
+              rawValue = BigInt(decResult.value ?? '0');
+            }
+
             // Convert raw to human-readable (1 OCT = 1000000 raw)
             const whole = rawValue / 1000000n;
             const frac = rawValue % 1000000n;
@@ -519,6 +632,73 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
           sendResponse(result);
           break;
         }
+        case 'SWAP_OCTUSD': {
+          const w = getWallet();
+          if (!w) { sendResponse({ error: 'locked' }); break; }
+          const { direction, amount } = payload as { direction: 'buy' | 'sell'; amount: string };
+          try {
+            const OCTUSD_ADDR = 'oct2hJMZbBdAAKTBXK61vs1TUx8oQNZVZyEpR4SXGFXgtvE';
+            const balInfo = await rpc.getBalance(w.address);
+            const nonce = balInfo.nonce + 1;
+            const ou = '200000';
+            const timestamp = Math.floor(Date.now() / 1000);
+            const tsStr = timestamp + '.0';
+
+            let amountRaw: string;
+            let methodName: string;
+            let message: string;
+
+            if (direction === 'buy') {
+              // mint: send OCT (payable), method has no params
+              if (amount.includes('.')) {
+                const [intPart, fracPart] = amount.split('.');
+                const frac = (fracPart + '000000').slice(0, 6);
+                amountRaw = String(BigInt(intPart) * 1000000n + BigInt(frac));
+              } else {
+                amountRaw = String(BigInt(amount) * 1000000n);
+              }
+              methodName = 'mint';
+              message = '[]';
+            } else {
+              // redeem: no OCT sent, pass octUSD amount (raw) as param
+              amountRaw = '0';
+              let redeemRaw: string;
+              if (amount.includes('.')) {
+                const [intPart, fracPart] = amount.split('.');
+                const frac = (fracPart + '000000').slice(0, 6);
+                redeemRaw = String(BigInt(intPart) * 1000000n + BigInt(frac));
+              } else {
+                redeemRaw = String(BigInt(amount) * 1000000n);
+              }
+              methodName = 'redeem';
+              message = JSON.stringify([Number(redeemRaw)]);
+            }
+
+            // Escape for canonical JSON
+            const msgEscaped = message.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+            const canonical = `{"from":"${w.address}","to_":"${OCTUSD_ADDR}","amount":"${amountRaw}","nonce":${nonce},"ou":"${ou}","timestamp":${tsStr},"op_type":"call","encrypted_data":"${methodName}","message":"${msgEscaped}"}`;
+            const txMsg = new TextEncoder().encode(canonical);
+            const txSig = sign(txMsg, w.secretKey);
+            const tx = {
+              from: w.address,
+              to_: OCTUSD_ADDR,
+              amount: amountRaw,
+              nonce,
+              ou,
+              timestamp,
+              op_type: 'call',
+              encrypted_data: methodName,
+              message,
+              signature: toBase64(txSig),
+              public_key: toBase64(w.publicKey),
+            };
+            const result = await rpc.submitTransaction(tx);
+            sendResponse(result);
+          } catch (err) {
+            sendResponse({ error: (err as Error).message ?? 'swap failed' });
+          }
+          break;
+        }
         case 'GET_ACTIVITY': {
           const w = getWallet();
           if (!w) { sendResponse({ error: 'locked' }); break; }
@@ -532,6 +712,223 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
             })
           );
           sendResponse({ transactions: txDetails.filter(Boolean) });
+          break;
+        }
+        case 'DAPP_REQUEST': {
+          const { method: dappMethod, params: dappParams, origin: dappOrigin } =
+            payload as { method: string; params: unknown[]; origin: string };
+
+          switch (dappMethod) {
+            case 'octra_requestAccounts':
+            case 'requestAccounts': {
+              let freshlyUnlocked = false;
+              if (!getWallet()) {
+                const unlocked = await ensureUnlocked();
+                if (!unlocked) { sendResponse({ error: 'Wallet is locked' }); break; }
+                freshlyUnlocked = true;
+              }
+              const w = getWallet()!;
+              // If user just unlocked, auto-approve since they showed intent
+              // Otherwise show approval popup for first-time connections
+              if (!approvedOrigins.has(dappOrigin)) {
+                if (!freshlyUnlocked) {
+                  const approved = await requestUserApproval('connect', dappOrigin, {});
+                  if (!approved) { sendResponse({ error: 'User rejected connection' }); break; }
+                }
+                approvedOrigins.add(dappOrigin);
+              }
+              sendResponse([w.address]);
+              break;
+            }
+            case 'octra_getBalance':
+            case 'octra_getEncryptedBalance':
+            case 'getBalance':
+            case 'get_balance': {
+              if (!getWallet()) {
+                const unlocked = await ensureUnlocked();
+                if (!unlocked) { sendResponse({ error: 'Wallet is locked' }); break; }
+              }
+              const w = getWallet()!;
+              const balRes = await rpc.getBalance(w.address);
+              sendResponse({
+                public: parseFloat(balRes.formatted),
+                private: 0,
+                total: parseFloat(balRes.formatted),
+                currency: 'OCT',
+              });
+              break;
+            }
+            case 'octra_getNetworkInfo':
+            case 'octra_networkInfo':
+            case 'getNetworkInfo':
+            case 'get_network_info': {
+              sendResponse({
+                id: 'mainnet',
+                name: 'Octra Mainnet',
+                rpcUrl: 'https://octra.network/rpc',
+                explorerUrl: 'https://octrascan.io',
+                supportsPrivacy: true,
+                isTestnet: false,
+                color: '#6366f1',
+              });
+              break;
+            }
+            case 'octra_permissions':
+            case 'permissions': {
+              sendResponse(['read_balance', 'send_transactions', 'sign_messages']);
+              break;
+            }
+            case 'octra_accounts':
+            case 'accounts': {
+              // Non-interactive version: return address if origin already approved
+              const w = getWallet();
+              if (!w || !approvedOrigins.has(dappOrigin)) {
+                sendResponse([]);
+              } else {
+                sendResponse([w.address]);
+              }
+              break;
+            }
+            case 'octra_signMessage':
+            case 'signMessage':
+            case 'sign_message': {
+              if (!getWallet()) {
+                const unlocked = await ensureUnlocked();
+                if (!unlocked) { sendResponse({ error: 'Wallet is locked' }); break; }
+              }
+              const w = getWallet()!;
+              const rawParam = (dappParams as unknown[])[0];
+              const message = typeof rawParam === 'string' ? rawParam : (rawParam as any)?.message;
+              if (!message || typeof message !== 'string') {
+                sendResponse({ error: 'Invalid message' });
+                break;
+              }
+              const approved = await requestUserApproval('sign_message', dappOrigin, { message });
+              if (!approved) { sendResponse({ error: 'User rejected signature request' }); break; }
+              const msgBytes = new TextEncoder().encode(message);
+              const sig = sign(msgBytes, w.secretKey);
+              sendResponse(toBase64(sig));
+              break;
+            }
+            case 'octra_sendTransaction':
+            case 'sendTransaction':
+            case 'send_transaction': {
+              if (!getWallet()) {
+                const unlocked = await ensureUnlocked();
+                if (!unlocked) { sendResponse({ error: 'Wallet is locked' }); break; }
+              }
+              const w = getWallet()!;
+              const [txData] = dappParams as [{ to: string; amount: number; message?: string }];
+              if (!txData?.to || txData.amount == null) {
+                sendResponse({ error: 'Invalid transaction data' });
+                break;
+              }
+              const txApproved = await requestUserApproval('send_transaction', dappOrigin, {
+                to: txData.to,
+                amount: txData.amount,
+                message: txData.message,
+              });
+              if (!txApproved) { sendResponse({ error: 'User rejected transaction' }); break; }
+              const amountRaw = String(Math.round(txData.amount * 1_000_000));
+              const balInfo = await rpc.getBalance(w.address);
+              const nonce = balInfo.nonce + 1;
+              const ts = Math.floor(Date.now() / 1000);
+              const tsStr = ts + '.0';
+              const canonical = `{"from":"${w.address}","to_":"${txData.to}","amount":"${amountRaw}","nonce":${nonce},"ou":"1000","timestamp":${tsStr},"op_type":"standard"}`;
+              const txSig = sign(new TextEncoder().encode(canonical), w.secretKey);
+              const txPayload = {
+                from: w.address,
+                to_: txData.to,
+                amount: amountRaw,
+                nonce,
+                ou: '1000',
+                timestamp: ts,
+                op_type: 'standard',
+                ...(txData.message ? { message: txData.message } : {}),
+                signature: toBase64(txSig),
+                public_key: toBase64(w.publicKey),
+              };
+              const submitRes = await rpc.submitTransaction(txPayload);
+              sendResponse({ txHash: submitRes.hash, success: true });
+              break;
+            }
+            case 'octra_callContract':
+            case 'callContract':
+            case 'call_contract': {
+              if (!getWallet()) {
+                const unlocked = await ensureUnlocked();
+                if (!unlocked) { sendResponse({ error: 'Wallet is locked' }); break; }
+              }
+              const w = getWallet()!;
+              const [callData] = dappParams as [{ contract: string; method: string; params: unknown[]; amount?: string; ou?: string }];
+              if (!callData?.contract || !callData?.method) {
+                sendResponse({ error: 'Invalid contract call data' });
+                break;
+              }
+              const callApproved = await requestUserApproval('call_contract', dappOrigin, {
+                contract: callData.contract,
+                method: callData.method,
+                params: callData.params,
+                amount: callData.amount,
+              });
+              if (!callApproved) { sendResponse({ error: 'User rejected contract call' }); break; }
+              const amt = callData.amount || '0';
+              const ou = callData.ou || '10000';
+              const balInfo2 = await rpc.getBalance(w.address);
+              const nonce2 = balInfo2.nonce + 1;
+              const ts2 = Math.floor(Date.now() / 1000);
+              const tsStr2 = ts2 + '.0';
+              const msgField = JSON.stringify(callData.params ?? []);
+              const escMsg = msgField.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+              const canonical2 = `{"from":"${w.address}","to_":"${callData.contract}","amount":"${amt}","nonce":${nonce2},"ou":"${ou}","timestamp":${tsStr2},"op_type":"call","encrypted_data":"${callData.method}","message":"${escMsg}"}`;
+              const sig2 = sign(new TextEncoder().encode(canonical2), w.secretKey);
+              const callPayload = {
+                from: w.address,
+                to_: callData.contract,
+                amount: amt,
+                nonce: nonce2,
+                ou,
+                timestamp: ts2,
+                op_type: 'call',
+                encrypted_data: callData.method,
+                message: msgField,
+                signature: toBase64(sig2),
+                public_key: toBase64(w.publicKey),
+              };
+              const callRes = await rpc.submitTransaction(callPayload);
+              sendResponse({ txHash: callRes.hash, success: true });
+              break;
+            }
+            case 'octra_contractCallView':
+            case 'contractCallView':
+            case 'contract_call_view':
+            case 'octra_contract_call_view': {
+              const [viewData] = dappParams as [{ contract: string; method: string; params: unknown[]; caller?: string }];
+              if (!viewData?.contract || !viewData?.method) {
+                sendResponse({ error: 'Invalid view call data' });
+                break;
+              }
+              const w2 = getWallet();
+              const caller = viewData.caller || w2?.address || '';
+              const viewRes = await rpc.rpcCall('contract_call', [viewData.contract, viewData.method, viewData.params ?? [], caller]);
+              sendResponse(viewRes);
+              break;
+            }
+            default: {
+              // Fall through to RPC passthrough for node-level methods
+              const RPC_PASSLIST = [
+                'octra_balance', 'octra_tokensByAddress', 'octra_account',
+                'octra_transaction', 'octra_recommendedFee', 'node_status',
+                'contract_call',
+              ];
+              if (RPC_PASSLIST.includes(dappMethod)) {
+                const result = await rpc.rpcCall(dappMethod, dappParams ?? []);
+                sendResponse(result);
+              } else {
+                sendResponse({ error: `Unsupported method: ${dappMethod}` });
+              }
+            }
+          }
           break;
         }
         case 'RPC_PASSTHROUGH': {

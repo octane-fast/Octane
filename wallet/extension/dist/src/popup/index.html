@@ -6,9 +6,9 @@
   <title>Octane</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&display=swap" rel="stylesheet">
   <script type="module" crossorigin src="../../popup.js"></script>
-  <link rel="stylesheet" crossorigin href="../../assets/popup.css">
+  <link rel="stylesheet" crossorigin href="../../assets/styles.css">
 </head>
 <body>
   <div id="app">
@@ -106,56 +106,78 @@
       </div>
       <span id="display-address" class="hidden"></span>
       <div class="balance-section">
-        <div class="balance-label">Balance</div>
-        <div id="display-balance" class="balance-value">--</div>
+        <div class="balance-label">Total Balance</div>
+        <div id="display-balance" class="balance-value">0.00 OCT</div>
+        <div id="balance-breakdown" class="balance-breakdown">
+          <span class="balance-sub"><span class="balance-sub-label">Public</span> <span id="display-public-balance">0.00</span></span>
+          <span class="balance-sub"><span class="balance-sub-label">Private</span> <span id="display-private-balance" class="shimmer">···</span></span>
+        </div>
       </div>
       <div class="tabs">
-        <button class="tab active" data-tab="tokens">Tokens</button>
+        <button class="tab active" data-tab="send">Send</button>
+        <button class="tab" data-tab="shield">Shield</button>
+        <button class="tab" data-tab="unshield">Unshield</button>
         <button class="tab" data-tab="activity">Activity</button>
-        <button class="tab" data-tab="transact">Transact</button>
       </div>
-      <div id="tab-tokens" class="tab-content">
-        <div id="token-list" class="token-list"><p class="muted">Loading...</p></div>
-      </div>
-      <div id="tab-activity" class="tab-content hidden">
-        <div id="activity-pending"></div>
-        <div id="activity-list" class="activity-list"><p class="muted">Loading...</p></div>
-        <a id="explorer-link" href="https://octrascan.io/" target="_blank" rel="noopener" class="explorer-link">View all on OctraScan ↗</a>
-      </div>
-      <div id="tab-transact" class="tab-content hidden">
-        <div class="sub-tabs">
-          <button class="sub-tab active" id="btn-send" data-mode="send">Send</button>
-          <button class="sub-tab" id="btn-shield" data-mode="shield">Shield</button>
-          <button class="sub-tab" id="btn-stealth" data-mode="stealth">Stealth</button>
-          <button class="sub-tab" id="btn-unshield" data-mode="unshield">Unshield</button>
-        </div>
-        <div class="encrypted-balance-row" style="display:none">
-          <span class="encrypted-label">Shielded Balance</span>
-          <span id="encrypted-balance-display" class="encrypted-value">
-            <button id="btn-decrypt-balance" class="decrypt-btn" title="Decrypt shielded balance">Reveal</button>
-          </span>
-        </div>
+      <div id="tab-send" class="tab-content">
         <div class="send-to-wrap">
           <input type="text" id="send-to" placeholder="Recipient address" autocomplete="off">
           <div id="send-to-suggestions" class="suggestions hidden"></div>
         </div>
         <input type="text" id="send-amount" placeholder="Amount (OCT)">
-        <button id="btn-submit-action" class="primary" disabled>Confirm</button>
-        <div id="send-result" class="result"></div>
-        <div id="stealth-inbox" class="stealth-inbox hidden">
-          <div class="stealth-inbox-header">
-            <span class="stealth-inbox-title">Stealth Inbox</span>
-            <button id="btn-stealth-scan" class="scan-btn">Scan</button>
-          </div>
-          <div id="stealth-outputs" class="stealth-outputs">
-            <p class="muted">Click Scan to check for incoming stealth payments.</p>
-          </div>
+        <div class="stealth-toggle-row" id="stealth-toggle-wrap">
+          <span class="stealth-toggle-label">Stealth</span>
+          <label class="toggle-switch">
+            <input type="checkbox" id="stealth-toggle-input">
+            <span class="stealth-slider"></span>
+          </label>
         </div>
+        <button id="btn-submit-send" class="primary" disabled>Confirm Send</button>
+        <div id="send-result" class="result"></div>
+      </div>
+      <div id="tab-shield" class="tab-content hidden">
+        <input type="text" id="shield-amount" placeholder="Amount (OCT)">
+        <button id="btn-submit-shield" class="primary" disabled>Confirm Shield</button>
+        <div id="shield-result" class="result"></div>
+      </div>
+      <div id="tab-unshield" class="tab-content hidden">
+        <input type="text" id="unshield-amount" placeholder="Amount (OCT)">
+        <button id="btn-submit-unshield" class="primary" disabled>Confirm Unshield</button>
+        <div id="unshield-result" class="result"></div>
+      </div>
+      <div id="tab-activity" class="tab-content hidden">
+        <div id="activity-pending"></div>
+        <div id="activity-list" class="activity-list"><p class="muted">No activity yet</p></div>
+        <a id="explorer-link" href="https://octrascan.io/" target="_blank" rel="noopener" class="explorer-link">View all on OctraScan ↗</a>
       </div>
       <button id="btn-lock" class="link lock-link">Lock Wallet</button>
     </div>
 
     <div id="toast" class="toast hidden"></div>
+
+    <!-- octUSD Swap Modal -->
+    <div id="swap-modal" class="modal-overlay hidden">
+      <div class="modal">
+        <div class="modal-header">
+          <h3>octUSD Swap</h3>
+          <button id="swap-close" class="modal-close">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="swap-rate" id="swap-rate">Loading rate...</div>
+          <div class="swap-tabs">
+            <button class="swap-tab active" data-dir="buy">Buy octUSD</button>
+            <button class="swap-tab" data-dir="sell">Sell octUSD</button>
+          </div>
+          <div class="swap-input-group">
+            <label id="swap-input-label">You pay (OCT)</label>
+            <input type="text" id="swap-input" placeholder="0.00" autocomplete="off">
+            <div class="swap-preview" id="swap-preview"></div>
+          </div>
+          <button id="btn-swap-confirm" class="primary" disabled>Confirm Swap</button>
+          <div id="swap-result" class="result"></div>
+        </div>
+      </div>
+    </div>
   </div>
 </body>
 </html>

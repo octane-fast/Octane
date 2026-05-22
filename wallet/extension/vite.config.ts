@@ -10,6 +10,7 @@ export default defineConfig({
     rollupOptions: {
       input: {
         popup: resolve(__dirname, 'src/popup/index.html'),
+        confirm: resolve(__dirname, 'src/popup/confirm.html'),
         background: resolve(__dirname, 'src/background/index.ts'),
         offscreen: resolve(__dirname, 'src/offscreen/index.ts'),
         'pvac-worker': resolve(__dirname, 'src/offscreen/worker.ts'),

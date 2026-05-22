@@ -70,13 +70,29 @@ port!.onMessage.addListener((msg) => {
     }
     worker.postMessage(msg);
   }
+  if (msg.action === 'warmup') {
+    // Pre-load WASM module so decrypt is instant later
+    worker.postMessage({ action: 'init', secretKeyB64: msg.secretKeyB64 });
+  }
 });
 
-// Also support ping via sendMessage for readiness check
+// Also support ping and decrypt via sendMessage
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.target !== 'offscreen') return;
   if (msg.action === 'ping') {
     sendResponse({ pong: true });
     return;
+  }
+  if (msg.action === 'decrypt') {
+    // One-shot decrypt: send to worker, listen for result
+    const handler = (ev: MessageEvent) => {
+      if (ev.data.type === 'result') {
+        worker.removeEventListener('message', handler);
+        sendResponse(ev.data.data);
+      }
+    };
+    worker.addEventListener('message', handler);
+    worker.postMessage({ action: 'decrypt', secretKeyB64: msg.secretKeyB64, cipherB64: msg.cipherB64 });
+    return true; // async sendResponse
   }
 });
