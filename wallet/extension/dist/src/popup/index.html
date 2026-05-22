@@ -16,7 +16,7 @@
     <div id="screen-setup" class="screen">
       <svg class="logo logo-large" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg"><rect width="128" height="128" rx="14" fill="#060d1f"/><circle cx="64" cy="64" r="58" fill="none" stroke="rgba(26,86,219,0.15)" stroke-width="0.5"/><circle cx="64" cy="64" r="53" fill="none" stroke="rgba(26,86,219,0.3)" stroke-width="0.5"/><circle cx="64" cy="64" r="48" fill="#1a56db"/><circle cx="64" cy="64" r="48" fill="none" stroke="#1a56db" stroke-width="1.5"/><circle cx="64" cy="64" r="38" fill="#060d1f"/><circle cx="64" cy="64" r="34" fill="none" stroke="rgba(96,165,250,0.4)" stroke-width="0.75"/><g class="flame" transform="translate(64,64) scale(0.42) translate(-196,-200)"><path fill="#fff" d="M196,268 C170,268 152,248 152,224 C152,204 162,192 170,180 C174,174 176,166 174,156 C180,162 184,170 184,180 C184,170 190,154 200,142 C200,154 206,164 214,170 C220,158 218,146 214,136 C226,148 240,168 240,192 C240,204 236,214 228,222 C224,212 222,200 224,190 C216,202 212,218 214,232 C210,226 208,218 208,210 C204,220 202,240 208,254 C204,260 200,264 196,268 Z"/></g></svg>
       <h1>Octane</h1>
-      <button id="btn-create">Create New Wallet</button>
+      <button id="btn-create" class="primary">Create New Wallet</button>
       <button id="btn-import" class="secondary">Import Seed Phrase</button>
       <div class="tor-toggle">
         <label class="toggle-row">
@@ -46,7 +46,7 @@
       <input type="password" id="create-password" placeholder="Set a password">
       <label>Confirm</label>
       <input type="password" id="create-password-confirm" placeholder="Confirm password">
-      <button id="btn-confirm-create">Continue</button>
+      <button id="btn-confirm-create" class="primary">Continue</button>
       <button class="link" id="btn-back-setup">Back</button>
     </div>
 
@@ -56,7 +56,7 @@
       <textarea id="import-mnemonic" rows="3" placeholder="Enter 12-word seed phrase"></textarea>
       <label>Password</label>
       <input type="password" id="import-password" placeholder="Set a password">
-      <button id="btn-confirm-import">Import</button>
+      <button id="btn-confirm-import" class="primary">Import</button>
       <button class="link" id="btn-back-setup2">Back</button>
     </div>
 
@@ -64,25 +64,24 @@
     <div id="screen-unlock" class="screen hidden">
       <svg class="logo logo-large" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg"><rect width="128" height="128" rx="14" fill="#060d1f"/><circle cx="64" cy="64" r="58" fill="none" stroke="rgba(26,86,219,0.15)" stroke-width="0.5"/><circle cx="64" cy="64" r="53" fill="none" stroke="rgba(26,86,219,0.3)" stroke-width="0.5"/><circle cx="64" cy="64" r="48" fill="#1a56db"/><circle cx="64" cy="64" r="48" fill="none" stroke="#1a56db" stroke-width="1.5"/><circle cx="64" cy="64" r="38" fill="#060d1f"/><circle cx="64" cy="64" r="34" fill="none" stroke="rgba(96,165,250,0.4)" stroke-width="0.75"/><g class="flame" transform="translate(64,64) scale(0.42) translate(-196,-200)"><path fill="#fff" d="M196,268 C170,268 152,248 152,224 C152,204 162,192 170,180 C174,174 176,166 174,156 C180,162 184,170 184,180 C184,170 190,154 200,142 C200,154 206,164 214,170 C220,158 218,146 214,136 C226,148 240,168 240,192 C240,204 236,214 228,222 C224,212 222,200 224,190 C216,202 212,218 214,232 C210,226 208,218 208,210 C204,220 202,240 208,254 C204,260 200,264 196,268 Z"/></g></svg>
       <h1>Octane</h1>
-      <input type="password" id="unlock-password" placeholder="Enter password">
-      <button id="btn-unlock">Unlock</button>
-      <button id="btn-biometric" class="secondary hidden">Unlock with Touch ID</button>
-      <div class="tor-toggle">
-        <label class="toggle-row">
-          <span class="toggle-label">Route via Tor</span>
-          <input type="checkbox" id="tor-toggle-unlock">
-          <span class="toggle-slider"></span>
-        </label>
-        <a href="https://www.torproject.org/download/" target="_blank" rel="noopener" class="tor-link" id="tor-download-link">Get Tor ↗</a>
+      <div class="unlock-form">
+        <input type="password" id="unlock-password" placeholder="Enter password">
+        <button id="btn-unlock" class="primary" disabled>Unlock</button>
+        <button id="btn-biometric" class="secondary hidden">Unlock with Touch ID</button>
       </div>
-      <div id="tor-status" class="tor-status"></div>
-      <div class="tor-instructions">
-        <p class="tor-instructions-title">How to use Tor privacy:</p>
-        <ol>
+      <div class="tor-section">
+        <div class="tor-section-header">
+          <label class="toggle-row compact">
+            <span class="toggle-label">Route via Tor</span>
+            <input type="checkbox" id="tor-toggle-unlock">
+          </label>
+          <a href="https://www.torproject.org/download/" target="_blank" rel="noopener" class="tor-link" id="tor-download-link">Get Tor ↗</a>
+        </div>
+        <div id="tor-status" class="tor-status"></div>
+        <ol class="tor-steps">
           <li>Download & open <a href="https://www.torproject.org/download/" target="_blank" rel="noopener">Tor Browser</a></li>
           <li>Keep Tor Browser running in the background</li>
           <li>Enable the toggle above</li>
-          <li>All RPC calls will route through Tor</li>
         </ol>
       </div>
     </div>
@@ -116,7 +115,6 @@
       <div class="tabs">
         <button class="tab active" data-tab="send">Send</button>
         <button class="tab" data-tab="shield">Shield</button>
-        <button class="tab" data-tab="unshield">Unshield</button>
         <button class="tab" data-tab="activity">Activity</button>
       </div>
       <div id="tab-send" class="tab-content">
@@ -125,25 +123,23 @@
           <div id="send-to-suggestions" class="suggestions hidden"></div>
         </div>
         <input type="text" id="send-amount" placeholder="Amount (OCT)">
-        <div class="stealth-toggle-row" id="stealth-toggle-wrap">
-          <span class="stealth-toggle-label">Stealth</span>
-          <label class="toggle-switch">
-            <input type="checkbox" id="stealth-toggle-input">
-            <span class="stealth-slider"></span>
-          </label>
+        <div class="shield-direction-toggle" id="send-mode-toggle">
+          <button class="shield-dir active" id="send-dir-public" data-dir="public">Public</button>
+          <span class="shield-dir-divider"></span>
+          <button class="shield-dir" id="send-dir-stealth" data-dir="stealth">Stealth</button>
         </div>
         <button id="btn-submit-send" class="primary" disabled>Confirm Send</button>
         <div id="send-result" class="result"></div>
       </div>
       <div id="tab-shield" class="tab-content hidden">
+        <div class="shield-direction-toggle" id="shield-mode-toggle">
+          <button class="shield-dir active" id="shield-dir-shield" data-dir="shield">Shield</button>
+          <span class="shield-dir-divider"></span>
+          <button class="shield-dir" id="shield-dir-unshield" data-dir="unshield">Unshield</button>
+        </div>
         <input type="text" id="shield-amount" placeholder="Amount (OCT)">
         <button id="btn-submit-shield" class="primary" disabled>Confirm Shield</button>
         <div id="shield-result" class="result"></div>
-      </div>
-      <div id="tab-unshield" class="tab-content hidden">
-        <input type="text" id="unshield-amount" placeholder="Amount (OCT)">
-        <button id="btn-submit-unshield" class="primary" disabled>Confirm Unshield</button>
-        <div id="unshield-result" class="result"></div>
       </div>
       <div id="tab-activity" class="tab-content hidden">
         <div id="activity-pending"></div>

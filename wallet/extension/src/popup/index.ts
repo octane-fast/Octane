@@ -200,9 +200,15 @@ document.getElementById('btn-confirm-import')!.addEventListener('click', async (
 });
 
 // Unlock
-document.getElementById('btn-unlock')!.addEventListener('click', doUnlock);
-document.getElementById('unlock-password')!.addEventListener('keydown', (e) => {
+const unlockBtn = document.getElementById('btn-unlock') as HTMLButtonElement;
+const unlockPwInput = document.getElementById('unlock-password') as HTMLInputElement;
+unlockBtn.addEventListener('click', doUnlock);
+unlockPwInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') doUnlock();
+});
+unlockPwInput.addEventListener('input', () => {
+  const hasText = unlockPwInput.value.length > 0;
+  unlockBtn.disabled = !hasText;
 });
 
 async function doUnlock() {
@@ -681,10 +687,22 @@ function showSuggestions(filter: string) {
 
 // Send / Shield / Unshield
 let sendMode: 'send' | 'stealth' = 'send';
+let shieldDirection: 'shield' | 'unshield' = 'shield';
 const submitSendBtn = document.getElementById('btn-submit-send') as HTMLButtonElement;
 const submitShieldBtn = document.getElementById('btn-submit-shield') as HTMLButtonElement;
-const submitUnshieldBtn = document.getElementById('btn-submit-unshield') as HTMLButtonElement;
-const stealthToggleInput = document.getElementById('stealth-toggle-input') as HTMLInputElement;
+
+// Send mode toggle (Public / Stealth)
+const sendModeToggle = document.getElementById('send-mode-toggle') as HTMLElement;
+document.querySelectorAll('#send-mode-toggle .shield-dir').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const dir = (btn as HTMLElement).dataset.dir as 'public' | 'stealth';
+    sendMode = dir === 'stealth' ? 'stealth' : 'send';
+    document.querySelectorAll('#send-mode-toggle .shield-dir').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    sendModeToggle.classList.toggle('unshield', dir === 'stealth');
+    submitSendBtn.textContent = sendMode === 'stealth' ? 'Confirm Stealth Send' : 'Confirm Send';
+  });
+});
 
 function updateSendState() {
   const amount = (document.getElementById('send-amount') as HTMLInputElement).value.trim();
@@ -697,27 +715,22 @@ function updateShieldState() {
   submitShieldBtn.disabled = !amount;
 }
 
-function updateUnshieldState() {
-  const amount = (document.getElementById('unshield-amount') as HTMLInputElement).value.trim();
-  submitUnshieldBtn.disabled = !amount;
-}
-
-// Stealth toggle switch
-stealthToggleInput.addEventListener('change', () => {
-  if (stealthToggleInput.checked) {
-    sendMode = 'stealth';
-    submitSendBtn.textContent = 'Confirm Stealth Send';
-  } else {
-    sendMode = 'send';
-    submitSendBtn.textContent = 'Confirm Send';
-  }
+// Shield direction toggle
+const shieldToggleContainer = document.getElementById('shield-mode-toggle') as HTMLElement;
+document.querySelectorAll('#shield-mode-toggle .shield-dir').forEach(btn => {
+  btn.addEventListener('click', () => {
+    shieldDirection = (btn as HTMLElement).dataset.dir as 'shield' | 'unshield';
+    document.querySelectorAll('#shield-mode-toggle .shield-dir').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    shieldToggleContainer.classList.toggle('unshield', shieldDirection === 'unshield');
+    submitShieldBtn.textContent = shieldDirection === 'shield' ? 'Confirm Shield' : 'Confirm Unshield';
+  });
 });
 
 // Validate inputs on typing
 document.getElementById('send-amount')!.addEventListener('input', updateSendState);
 document.getElementById('send-to')!.addEventListener('input', updateSendState);
 document.getElementById('shield-amount')!.addEventListener('input', updateShieldState);
-document.getElementById('unshield-amount')!.addEventListener('input', updateUnshieldState);
 
 // Send submit handler
 submitSendBtn.addEventListener('click', async () => {
@@ -747,33 +760,29 @@ submitSendBtn.addEventListener('click', async () => {
   }
 });
 
-// Shield submit handler
+// Shield/Unshield submit handler
 submitShieldBtn.addEventListener('click', async () => {
   const amount = (document.getElementById('shield-amount') as HTMLInputElement).value.trim();
   if (!amount) { showToast('Enter an amount'); return; }
   const resultEl = document.getElementById('shield-result')!;
-  resultEl.textContent = 'Shielding...';
-  const res = await sendMsg('ENCRYPT_BALANCE', { amount }) as { jobId?: string; error?: string };
-  if (res.error) {
-    resultEl.textContent = `Error: ${res.error}`;
-  } else if (res.jobId) {
-    await chrome.storage.local.set({ activeShieldJob: res.jobId, activeShieldStart: Date.now() });
-    pollJobStatus(res.jobId, resultEl, 'shield');
-  }
-});
-
-// Unshield submit handler
-submitUnshieldBtn.addEventListener('click', async () => {
-  const amount = (document.getElementById('unshield-amount') as HTMLInputElement).value.trim();
-  if (!amount) { showToast('Enter an amount'); return; }
-  const resultEl = document.getElementById('unshield-result')!;
-  resultEl.textContent = 'Unshielding...';
-  const res = await sendMsg('DECRYPT_BALANCE', { amount }) as { jobId?: string; error?: string };
-  if (res.error) {
-    resultEl.textContent = `Error: ${res.error}`;
-  } else if (res.jobId) {
-    await chrome.storage.local.set({ activeUnshieldJob: res.jobId, activeUnshieldStart: Date.now() });
-    pollJobStatus(res.jobId, resultEl, 'unshield');
+  if (shieldDirection === 'shield') {
+    resultEl.textContent = 'Shielding...';
+    const res = await sendMsg('ENCRYPT_BALANCE', { amount }) as { jobId?: string; error?: string };
+    if (res.error) {
+      resultEl.textContent = `Error: ${res.error}`;
+    } else if (res.jobId) {
+      await chrome.storage.local.set({ activeShieldJob: res.jobId, activeShieldStart: Date.now() });
+      pollJobStatus(res.jobId, resultEl, 'shield');
+    }
+  } else {
+    resultEl.textContent = 'Unshielding...';
+    const res = await sendMsg('DECRYPT_BALANCE', { amount }) as { jobId?: string; error?: string };
+    if (res.error) {
+      resultEl.textContent = `Error: ${res.error}`;
+    } else if (res.jobId) {
+      await chrome.storage.local.set({ activeUnshieldJob: res.jobId, activeUnshieldStart: Date.now() });
+      pollJobStatus(res.jobId, resultEl, 'unshield');
+    }
   }
 });
 
