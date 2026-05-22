@@ -247,7 +247,7 @@ async function doUnlock() {
 }
 
 // Lock
-document.getElementById('btn-lock')!.addEventListener('click', async () => {
+document.getElementById('btn-lock')?.addEventListener('click', async () => {
   await sendMsg('LOCK');
   showScreen(screenUnlock);
 });
@@ -274,6 +274,28 @@ document.querySelectorAll('.tab').forEach(tab => {
 // === Polling Services ===
 // Centralized polling for all live data updates
 
+function getCurrentAddress(): string {
+  return document.getElementById('display-address')?.getAttribute('data-full') || '';
+}
+
+async function updateBalanceCache(total: number) {
+  const addr = getCurrentAddress();
+  if (!addr) return;
+  const key = `bal_${addr}`;
+  await chrome.storage.local.set({ [key]: total });
+}
+
+async function getCachedBalance(addr: string): Promise<number> {
+  const key = `bal_${addr}`;
+  const result = await chrome.storage.local.get(key);
+  return result[key] ?? 0;
+}
+
+function updateGetOctButton(total: number) {
+  const getBtn = document.getElementById('btn-get-octra');
+  if (getBtn) getBtn.style.display = total > 0 ? 'none' : '';
+}
+
 async function refreshPublicBalance() {
   const balRes = await sendMsg('GET_BALANCE') as { formatted?: string; error?: string };
   const publicBal = balRes.formatted ?? '0';
@@ -281,7 +303,10 @@ async function refreshPublicBalance() {
   const pub = parseFloat(publicBal) || 0;
   const privEl = document.getElementById('display-private-balance')!;
   const priv = parseFloat(privEl.textContent || '0') || 0;
-  document.getElementById('display-balance')!.textContent = `${(pub + priv).toFixed(2)} OCT`;
+  const total = pub + priv;
+  document.getElementById('display-balance')!.textContent = `${total.toFixed(2)} OCT`;
+  updateGetOctButton(total);
+  await updateBalanceCache(total);
 }
 
 async function refreshPrivateBalance() {
@@ -297,7 +322,10 @@ async function refreshPrivateBalance() {
       const pubEl = document.getElementById('display-public-balance')!;
       const pub = parseFloat(pubEl.textContent || '0') || 0;
       const priv = parseFloat(privRes.balance) || 0;
-      document.getElementById('display-balance')!.textContent = `${(pub + priv).toFixed(2)} OCT`;
+      const total = pub + priv;
+      document.getElementById('display-balance')!.textContent = `${total.toFixed(2)} OCT`;
+      updateGetOctButton(total);
+      await updateBalanceCache(total);
     }
   } catch { /* silent */ }
 }
@@ -491,6 +519,10 @@ async function loadMainScreen() {
   addrEl.setAttribute('data-full', fullAddr);
   addrEl.textContent = fullAddr.slice(0, 12) + '…' + fullAddr.slice(-10);
 
+  // Immediately hide Get OCT button if cached balance exists
+  const cachedBal = await getCachedBalance(fullAddr);
+  updateGetOctButton(cachedBal);
+
   // Initial data load — fetch public balance + tokens immediately, private balance async
   await refreshPublicBalance();
   await refreshTokens();
@@ -638,6 +670,22 @@ document.getElementById('account-select')!.addEventListener('change', async (e) 
   await saveWallet(state);
   const account = state.accounts[idx];
   await sendMsg('SWITCH_ACCOUNT', { hdIndex: account.hdIndex });
+
+  // Reset displayed balance and activity immediately
+  document.getElementById('display-balance')!.textContent = '0.00 OCT';
+  document.getElementById('display-public-balance')!.textContent = '0.00';
+  const privEl = document.getElementById('display-private-balance')!;
+  privEl.textContent = '···';
+  privEl.classList.add('shimmer');
+  document.getElementById('activity-list')!.innerHTML = '<p class="muted">Loading…</p>';
+  document.getElementById('activity-pending')!.innerHTML = '';
+  activityCache.clear();
+  lastActivityHtml = '';
+
+  // Check cached balance to decide Get OCT button visibility immediately
+  const cachedBal = await getCachedBalance(account.address);
+  updateGetOctButton(cachedBal);
+
   await loadMainScreen();
 });
 

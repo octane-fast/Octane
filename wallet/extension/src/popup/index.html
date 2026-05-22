@@ -114,9 +114,12 @@
       <div class="balance-section">
         <div class="balance-label">Total Balance</div>
         <div id="display-balance" class="balance-value">0.00 OCT</div>
-        <div id="balance-breakdown" class="balance-breakdown">
-          <span class="balance-sub"><span class="balance-sub-label">Public</span> <span id="display-public-balance">0.00</span></span>
-          <span class="balance-sub"><span class="balance-sub-label">Private</span> <span id="display-private-balance" class="shimmer">···</span></span>
+        <div class="balance-actions">
+          <div id="balance-breakdown" class="balance-breakdown">
+            <span class="balance-sub"><span class="balance-sub-label">Public</span> <span id="display-public-balance">0.00</span></span>
+            <span class="balance-sub"><span class="balance-sub-label">Private</span> <span id="display-private-balance" class="shimmer">···</span></span>
+          </div>
+          <button id="btn-get-octra" class="get-octra-btn" onclick="window.open('https://octra.org/get','_blank')">Get OCT</button>
         </div>
       </div>
       <div class="tabs">
@@ -153,7 +156,6 @@
         <div id="activity-list" class="activity-list"><p class="muted">No activity yet</p></div>
         <a id="explorer-link" href="https://octrascan.io/" target="_blank" rel="noopener" class="explorer-link">View all on OctraScan ↗</a>
       </div>
-      <button id="btn-lock" class="link lock-link">Lock Wallet</button>
     </div>
 
     <div id="toast" class="toast hidden"></div>
