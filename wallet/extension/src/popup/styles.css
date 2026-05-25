@@ -375,3 +375,15 @@ label { font-size: 11px; font-weight: 500; color: var(--text-muted); margin-top:
 /* Scrollbar — hidden to prevent layout shift */
 ::-webkit-scrollbar { width: 0; display: none; }
 body { scrollbar-width: none; }
+
+/* Prover Settings */
+.prover-status { margin-bottom: var(--space-md); }
+.prover-row { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.prover-row:last-child { border-bottom: none; }
+.prover-label { font-size: 13px; color: var(--text); }
+.prover-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+.prover-dot.green { background: #22c55e; box-shadow: 0 0 6px rgba(34,197,94,0.4); }
+.prover-dot.grey { background: #555; }
+.prover-actions { display: flex; flex-direction: column; gap: 8px; margin-bottom: var(--space-sm); }
+.file-input-label { display: block; text-align: center; cursor: pointer; padding: 10px; border-radius: var(--radius-sm); font-size: 13px; font-weight: 600; }
+.prover-hint { font-size: 11px; line-height: 1.4; margin-top: 4px; }

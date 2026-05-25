@@ -1561,7 +1561,46 @@ async function runStealthSendJob(jobId: string, to: string, amountRaw: bigint, a
         await submitStealthTx(jobId, w, stealthData, 0);
         return;
       } catch {
-        await update({ step: 'Prover unavailable, falling back...' });
+        await update({ step: 'Local prover unavailable, trying remote...' });
+      }
+    }
+
+    // [4b] Try remote prover
+    if (!proverAvailable) {
+      const remoteConfig = await isRemoteProverConfigured();
+      if (remoteConfig) {
+        await update({ step: 'Connecting to remote prover...' });
+        const seed = crypto.getRandomValues(new Uint8Array(32));
+        try {
+          const result = await runRemoteProver(jobId, {
+            operation: 'stealth',
+            secretKeyB64: toBase64(w.secretKey.slice(0, 32)),
+            currentCipherB64,
+            amountRaw: String(amountRaw),
+            seedB64: toBase64(seed),
+            blindingB64: toBase64(blinding),
+          }, remoteConfig);
+
+          const stealthData = JSON.stringify({
+            version: 5,
+            delta_cipher: result.cipher,
+            commitment: result.commitment ?? result.amount_commitment,
+            range_proof_delta: result.range_proof_delta,
+            range_proof_balance: result.range_proof_balance,
+            eph_pub: toBase64(stealth.ephPk),
+            stealth_tag: hexEncode(stealth.tag),
+            enc_amount: stealth.encAmount,
+            claim_pub: hexEncode(stealth.claimPub),
+            amount_commitment: result.amount_commitment,
+            send_zero_proof: result.zero_proof ?? result.send_zero_proof,
+          });
+
+          await update({ step: 'Submitting transaction...' });
+          await submitStealthTx(jobId, w, stealthData, 0);
+          return;
+        } catch {
+          await update({ step: 'Remote prover unavailable, falling back to in-browser...' });
+        }
       }
     }
 
@@ -1739,7 +1778,40 @@ async function runStealthClaimJob(
         await submitClaimTx(jobId, w, claimData, 0);
         return;
       } catch {
-        await update({ step: 'Prover unavailable, falling back...' });
+        await update({ step: 'Local prover unavailable, trying remote...' });
+      }
+    }
+
+    // Try remote prover
+    if (!proverAvailable) {
+      const remoteConfig = await isRemoteProverConfigured();
+      if (remoteConfig) {
+        await update({ step: 'Connecting to remote prover...' });
+        const seed = crypto.getRandomValues(new Uint8Array(32));
+        try {
+          const result = await runRemoteProver(jobId, {
+            operation: 'claim',
+            secretKeyB64: toBase64(w.secretKey.slice(0, 32)),
+            amountRaw: String(amountRaw),
+            seedB64: toBase64(seed),
+            blindingB64: toBase64(blinding),
+          }, remoteConfig);
+
+          const claimData = JSON.stringify({
+            version: 5,
+            output_id: Number(outputId),
+            claim_cipher: result.cipher,
+            commitment: result.commitment ?? result.amount_commitment,
+            claim_secret: hexEncode(claimSecret),
+            zero_proof: result.zero_proof,
+          });
+
+          await update({ step: 'Submitting transaction...' });
+          await submitClaimTx(jobId, w, claimData, 0);
+          return;
+        } catch {
+          await update({ step: 'Remote prover unavailable, falling back to in-browser...' });
+        }
       }
     }
 

@@ -98,6 +98,7 @@
       <div class="header">
         <svg class="header-logo" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg"><rect width="128" height="128" rx="14" fill="#060d1f"/><circle cx="64" cy="64" r="58" fill="none" stroke="rgba(26,86,219,0.15)" stroke-width="0.5"/><circle cx="64" cy="64" r="53" fill="none" stroke="rgba(26,86,219,0.3)" stroke-width="0.5"/><circle cx="64" cy="64" r="48" fill="#1a56db"/><circle cx="64" cy="64" r="48" fill="none" stroke="#1a56db" stroke-width="1.5"/><circle cx="64" cy="64" r="38" fill="#060d1f"/><circle cx="64" cy="64" r="34" fill="none" stroke="rgba(96,165,250,0.4)" stroke-width="0.75"/><g transform="translate(64,64) scale(0.42) translate(-196,-200)"><path fill="#fff" d="M196,268 C170,268 152,248 152,224 C152,204 162,192 170,180 C174,174 176,166 174,156 C180,162 184,170 184,180 C184,170 190,154 200,142 C200,154 206,164 214,170 C220,158 218,146 214,136 C226,148 240,168 240,192 C240,204 236,214 228,222 C224,212 222,200 224,190 C216,202 212,218 214,232 C210,226 208,218 208,210 C204,220 202,240 208,254 C204,260 200,264 196,268 Z"/></g></svg>
         <div class="header-actions">
+          <button id="btn-prover-settings" class="icon-btn" title="Prover Settings"><svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15 1.65 1.65 0 003 14.08V14a2 2 0 014 0v.09c0 .67.44 1.26 1.08 1.51z"/></svg></button>
           <label class="toggle-row compact">
             <span class="toggle-label">Tor</span>
             <input type="checkbox" id="tor-toggle-main">
@@ -180,6 +181,33 @@
           </div>
           <button id="btn-swap-confirm" class="primary" disabled>Confirm Swap</button>
           <div id="swap-result" class="result"></div>
+        </div>
+      </div>
+    </div>
+    <!-- Prover Settings Modal -->
+    <div id="prover-modal" class="modal-overlay hidden">
+      <div class="modal">
+        <div class="modal-header">
+          <h3>Prover Settings</h3>
+          <button id="prover-close" class="modal-close">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="prover-status">
+            <div class="prover-row">
+              <span class="prover-label">Local (Desktop)</span>
+              <span id="prover-local-status" class="prover-dot grey"></span>
+            </div>
+            <div class="prover-row">
+              <span class="prover-label">Remote (Relay)</span>
+              <span id="prover-remote-status" class="prover-dot grey"></span>
+            </div>
+          </div>
+          <div class="prover-actions">
+            <label class="file-input-label primary" for="prover-file-input">Import Pairing File</label>
+            <input type="file" id="prover-file-input" accept=".pair" class="hidden">
+            <button id="btn-remove-pairing" class="secondary" style="display:none">Remove Pairing</button>
+          </div>
+          <p class="muted prover-hint">Import a <code>.pair</code> file from your Octane Accelerator to enable fast remote proving.</p>
         </div>
       </div>
     </div>

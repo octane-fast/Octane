@@ -919,4 +919,43 @@ async function checkActiveJob() {
   }
 }
 
+// --- Prover Settings ---
+const proverModal = document.getElementById('prover-modal')!;
+document.getElementById('btn-prover-settings')!.addEventListener('click', () => {
+  proverModal.classList.remove('hidden');
+  refreshProverStatus();
+});
+document.getElementById('prover-close')!.addEventListener('click', () => proverModal.classList.add('hidden'));
+proverModal.addEventListener('click', (e) => { if (e.target === proverModal) proverModal.classList.add('hidden'); });
+
+async function refreshProverStatus() {
+  const res = await sendMsg('GET_PROVER_STATUS') as { local?: boolean; remote?: boolean };
+  const localDot = document.getElementById('prover-local-status')!;
+  const remoteDot = document.getElementById('prover-remote-status')!;
+  localDot.className = `prover-dot ${res.local ? 'green' : 'grey'}`;
+  remoteDot.className = `prover-dot ${res.remote ? 'green' : 'grey'}`;
+  const removeBtn = document.getElementById('btn-remove-pairing') as HTMLButtonElement;
+  removeBtn.style.display = res.remote ? '' : 'none';
+}
+
+document.getElementById('prover-file-input')!.addEventListener('change', async (e) => {
+  const file = (e.target as HTMLInputElement).files?.[0];
+  if (!file) return;
+  const text = await file.text();
+  const res = await sendMsg('IMPORT_PAIRING', { fileContent: text }) as { ok?: boolean; error?: string };
+  if (res.ok) {
+    showToast('Pairing imported!');
+    refreshProverStatus();
+  } else {
+    showToast(res.error ?? 'Import failed');
+  }
+  (e.target as HTMLInputElement).value = '';
+});
+
+document.getElementById('btn-remove-pairing')!.addEventListener('click', async () => {
+  await sendMsg('REMOVE_PAIRING');
+  showToast('Pairing removed');
+  refreshProverStatus();
+});
+
 init();
