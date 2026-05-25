@@ -461,7 +461,7 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
             // Try native prover first
             const proverAvailable = await isProverAvailable();
             if (proverAvailable) {
-              await chrome.storage.local.set({ [storageKey]: { status: 'running', step: 'Using native prover...' } });
+              await chrome.storage.local.set({ [storageKey]: { status: 'running', step: 'Proving ⚡ Desktop', prover: 'local' } });
               const seed = crypto.getRandomValues(new Uint8Array(32));
               const blinding = crypto.getRandomValues(new Uint8Array(32));
               try {
@@ -1391,7 +1391,7 @@ async function runUnshieldJob(jobId: string, decAmountRaw: bigint) {
     if (!proverAvailable) {
       const remoteConfig = await isRemoteProverConfigured();
       if (remoteConfig) {
-        await update({ step: 'Connecting to remote prover...' });
+        await update({ step: 'Proving ☁️ Remote', prover: 'remote' });
         try {
           const result = await runRemoteProver(jobId, proverPayload, remoteConfig);
           console.log('[octane] remote prover result:', JSON.stringify(result).slice(0, 500));
@@ -1406,7 +1406,7 @@ async function runUnshieldJob(jobId: string, decAmountRaw: bigint) {
     }
 
     // Fallback: Spin up offscreen document for heavy crypto (WASM)
-    await update({ step: 'Starting computation engine...' });
+    await update({ step: 'Proving 🌐 In-Browser', prover: 'wasm' });
     await ensureOffscreen();
 
     if (!offscreenPort) throw new Error('Offscreen port not connected');
@@ -1530,7 +1530,7 @@ async function runStealthSendJob(jobId: string, to: string, amountRaw: bigint, a
     // [4] Try native prover first
     const proverAvailable = await isProverAvailable();
     if (proverAvailable) {
-      await update({ step: 'Using native prover...' });
+      await update({ step: 'Proving ⚡ Desktop', prover: 'local' });
       const seed = crypto.getRandomValues(new Uint8Array(32));
       try {
         const result = await runNativeProver(jobId, {
@@ -1569,7 +1569,7 @@ async function runStealthSendJob(jobId: string, to: string, amountRaw: bigint, a
     if (!proverAvailable) {
       const remoteConfig = await isRemoteProverConfigured();
       if (remoteConfig) {
-        await update({ step: 'Connecting to remote prover...' });
+        await update({ step: 'Proving ☁️ Remote', prover: 'remote' });
         const seed = crypto.getRandomValues(new Uint8Array(32));
         try {
           const result = await runRemoteProver(jobId, {
@@ -1606,7 +1606,7 @@ async function runStealthSendJob(jobId: string, to: string, amountRaw: bigint, a
 
     // [5] WASM fallback
     if (!isInitialized()) {
-      await update({ step: 'Initializing PVAC...' });
+      await update({ step: 'Proving 🌐 In-Browser', prover: 'wasm' });
       const ok = await initPvac(w.secretKey.slice(0, 32));
       if (!ok) throw new Error('PVAC init failed');
     }
@@ -1753,7 +1753,7 @@ async function runStealthClaimJob(
     // Try native prover first
     const proverAvailable = await isProverAvailable();
     if (proverAvailable) {
-      await update({ step: 'Using native prover...' });
+      await update({ step: 'Proving ⚡ Desktop', prover: 'local' });
       const seed = crypto.getRandomValues(new Uint8Array(32));
       try {
         const result = await runNativeProver(jobId, {
@@ -1786,7 +1786,7 @@ async function runStealthClaimJob(
     if (!proverAvailable) {
       const remoteConfig = await isRemoteProverConfigured();
       if (remoteConfig) {
-        await update({ step: 'Connecting to remote prover...' });
+        await update({ step: 'Proving ☁️ Remote', prover: 'remote' });
         const seed = crypto.getRandomValues(new Uint8Array(32));
         try {
           const result = await runRemoteProver(jobId, {
@@ -1817,7 +1817,7 @@ async function runStealthClaimJob(
 
     // WASM fallback
     if (!isInitialized()) {
-      await update({ step: 'Initializing PVAC...' });
+      await update({ step: 'Proving 🌐 In-Browser', prover: 'wasm' });
       const ok = await initPvac(w.secretKey.slice(0, 32));
       if (!ok) throw new Error('PVAC init failed');
     }

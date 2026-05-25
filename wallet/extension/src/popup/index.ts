@@ -877,7 +877,7 @@ function pollJobStatus(jobId: string, resultEl: HTMLElement, jobType: 'shield' |
   resultEl.textContent = `${label} — starting...`;
   if (pollTimer) clearInterval(pollTimer);
   pollTimer = setInterval(async () => {
-    const res = await sendMsg('GET_JOB_STATUS', { jobId }) as { status: string; step?: string; hash?: string; error?: string };
+    const res = await sendMsg('GET_JOB_STATUS', { jobId }) as { status: string; step?: string; prover?: string; hash?: string; error?: string };
     if (res.status === 'running') {
       resultEl.textContent = `${label} — ${res.step ?? 'working...'}`;
     } else if (res.status === 'pending_unlock') {
