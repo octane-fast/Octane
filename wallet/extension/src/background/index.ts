@@ -1762,6 +1762,8 @@ async function resumeUnshieldSubmission(jobId: string, attempt = 0) {
       zero_proof: cryptoResult.zero_proof,
       blinding: cryptoResult.blinding,
       range_proof_balance: cryptoResult.range_proof_balance,
+      ...(cryptoResult.range_proof_delta ? { range_proof_delta: cryptoResult.range_proof_delta } : {}),
+      ...(cryptoResult.commitment ? { commitment: cryptoResult.commitment } : {}),
     });
     console.log('[octane] encData length:', encData.length, 'preview:', encData.slice(0, 200));
 
@@ -1798,6 +1800,7 @@ async function resumeUnshieldSubmission(jobId: string, attempt = 0) {
     await chrome.storage.local.remove([`job_${jobId}_crypto`, `job_${jobId}_params`]);
   } catch (err) {
     const msg = (err as Error).message ?? '';
+    console.error('[octane] submit error:', msg, err);
     // Retry indefinitely on any error — user can cancel
     const nextAttempt = attempt + 1;
     await chrome.storage.local.set({ [storageKey]: { status: 'running', step: `Submitting transaction... (retry ${nextAttempt})`, attempt: nextAttempt } });
