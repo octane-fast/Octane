@@ -1059,6 +1059,39 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
           }
           break;
         }
+        case 'IMPORT_PAIRING': {
+          // Parse .pair file content and store pairing config
+          const { fileContent } = payload as { fileContent: string };
+          const lines = fileContent.split('\n');
+          const config: Record<string, string> = {};
+          for (const line of lines) {
+            if (line.startsWith('#') || !line.includes('=')) continue;
+            const [k, ...v] = line.split('=');
+            config[k.trim()] = v.join('=').trim();
+          }
+          if (!config.relay || !config.room || !config.key) {
+            sendResponse({ error: 'Invalid pairing file' });
+            break;
+          }
+          await chrome.storage.local.set({ pairingConfig: { relay: config.relay, room: config.room, key: config.key } });
+          sendResponse({ ok: true });
+          break;
+        }
+        case 'REMOVE_PAIRING': {
+          await chrome.storage.local.remove('pairingConfig');
+          sendResponse({ ok: true });
+          break;
+        }
+        case 'GET_PROVER_STATUS': {
+          const local = await isProverAvailable();
+          const remoteConfig = await isRemoteProverConfigured();
+          sendResponse({
+            local,
+            remote: !!remoteConfig,
+            relayUrl: remoteConfig?.relay ?? null,
+          });
+          break;
+        }
         default:
           sendResponse({ error: `unknown message type: ${type}` });
       }
@@ -1147,6 +1180,13 @@ let currentJobStorageKey: string | null = null;
 const PROVER_URL = 'http://127.0.0.1:19876';
 const PROVER_WS_URL = 'ws://127.0.0.1:19876/prove';
 
+// Remote prover pairing config (stored in chrome.storage.local as 'pairingConfig')
+interface PairingConfig {
+  relay: string;   // e.g. "wss://relay.octane.fast"
+  room: string;    // room ID
+  key: string;     // base64 X25519 public key of accelerator
+}
+
 async function isProverAvailable(): Promise<boolean> {
   try {
     const ctrl = new AbortController();
@@ -1158,6 +1198,88 @@ async function isProverAvailable(): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+async function isRemoteProverConfigured(): Promise<PairingConfig | null> {
+  const { pairingConfig } = await chrome.storage.local.get('pairingConfig');
+  return pairingConfig ?? null;
+}
+
+// Connect to the remote prover through the relay
+function runRemoteProver(jobId: string, payload: Record<string, string>, config: PairingConfig): Promise<Record<string, string>> {
+  return new Promise((resolve, reject) => {
+    const storageKey = `job_${jobId}`;
+    const wsUrl = `${config.relay}/room/${config.room}?role=client`;
+    const ws = new WebSocket(wsUrl);
+    let settled = false;
+    let peerConnected = false;
+
+    ws.onopen = () => {
+      // Wait for peer_connected before sending payload
+    };
+
+    ws.onmessage = (ev) => {
+      try {
+        const msg = JSON.parse(ev.data as string);
+
+        // Relay control messages
+        if (msg.type === 'peer_connected') {
+          peerConnected = true;
+          // Now send the prove request through relay to accelerator
+          ws.send(JSON.stringify({ ...payload, jobId }));
+          return;
+        }
+        if (msg.type === 'peer_disconnected') {
+          if (!settled) {
+            settled = true;
+            ws.close();
+            reject(new Error('Remote prover disconnected'));
+          }
+          return;
+        }
+
+        // Prover messages (forwarded from accelerator)
+        if (msg.type === 'status') {
+          chrome.storage.local.set({ [storageKey]: { status: 'running', step: msg.step } });
+        } else if (msg.type === 'result' && msg.data) {
+          settled = true;
+          ws.close();
+          resolve(msg.data);
+        } else if (msg.type === 'error') {
+          settled = true;
+          ws.close();
+          reject(new Error(msg.error ?? 'Remote prover error'));
+        }
+      } catch (e) {
+        settled = true;
+        ws.close();
+        reject(e);
+      }
+    };
+
+    ws.onerror = () => {
+      if (!settled) {
+        settled = true;
+        reject(new Error('Relay connection failed'));
+      }
+    };
+
+    ws.onclose = () => {
+      if (!settled) {
+        settled = true;
+        reject(new Error('Relay disconnected'));
+      }
+    };
+
+    // Timeout: if no peer_connected after 15s, give up
+    setTimeout(() => {
+      if (!peerConnected && !settled) {
+        settled = true;
+        ws.close();
+        reject(new Error('Remote prover not reachable (timeout)'));
+      }
+    }, 15000);
+  });
 }
 
 function runNativeProver(jobId: string, payload: Record<string, string>): Promise<Record<string, string>> {
@@ -1260,8 +1382,26 @@ async function runUnshieldJob(jobId: string, decAmountRaw: bigint) {
         resumeUnshieldSubmission(jobId);
         return;
       } catch (proverErr) {
-        // Fall back to WASM
-        await update({ step: 'Prover unavailable, falling back to in-browser computation...' });
+        // Fall back to remote prover or WASM
+        await update({ step: 'Local prover unavailable, trying remote...' });
+      }
+    }
+
+    // Try remote prover via relay (if pairing configured and local unavailable)
+    if (!proverAvailable) {
+      const remoteConfig = await isRemoteProverConfigured();
+      if (remoteConfig) {
+        await update({ step: 'Connecting to remote prover...' });
+        try {
+          const result = await runRemoteProver(jobId, proverPayload, remoteConfig);
+          console.log('[octane] remote prover result:', JSON.stringify(result).slice(0, 500));
+          await chrome.storage.local.set({ [`job_${jobId}_crypto`]: { ...result, decAmountRaw: String(decAmountRaw) } });
+          await chrome.storage.local.set({ [storageKey]: { status: 'crypto_done', step: 'Submitting transaction...' } });
+          resumeUnshieldSubmission(jobId);
+          return;
+        } catch (remoteErr) {
+          await update({ step: 'Remote prover unavailable, falling back to in-browser...' });
+        }
       }
     }
 
