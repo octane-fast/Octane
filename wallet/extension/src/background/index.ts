@@ -1238,8 +1238,9 @@ async function runUnshieldJob(jobId: string, decAmountRaw: bigint) {
     const blinding = crypto.getRandomValues(new Uint8Array(32));
 
     const proverPayload = {
+      operation: 'unshield',
       currentCipherB64,
-      decAmountRaw: String(decAmountRaw),
+      amountRaw: String(decAmountRaw),
       seedB64: toBase64(seed),
       blindingB64: toBase64(blinding),
       secretKeyB64: toBase64(w.secretKey.slice(0, 32)),
