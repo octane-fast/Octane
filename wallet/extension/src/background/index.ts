@@ -1253,8 +1253,9 @@ async function runUnshieldJob(jobId: string, decAmountRaw: bigint) {
       await update({ step: 'Using native prover...' });
       try {
         const result = await runNativeProver(jobId, proverPayload);
-        // Store result and proceed to submission
-        await chrome.storage.local.set({ [`job_${jobId}_crypto`]: result });
+        console.log('[octane] native prover result:', JSON.stringify(result).slice(0, 500));
+        // Store result and proceed to submission (include decAmountRaw for resilience)
+        await chrome.storage.local.set({ [`job_${jobId}_crypto`]: { ...result, decAmountRaw: String(decAmountRaw) } });
         await chrome.storage.local.set({ [storageKey]: { status: 'crypto_done', step: 'Submitting transaction...' } });
         resumeUnshieldSubmission(jobId);
         return;
@@ -1740,7 +1741,18 @@ async function resumeUnshieldSubmission(jobId: string, attempt = 0) {
       return;
     }
 
-    const decAmountRaw = params?.decAmountRaw ?? '0';
+    const decAmountRaw = cryptoResult.decAmountRaw ?? params?.decAmountRaw ?? '0';
+    console.log('[octane] resumeUnshieldSubmission cryptoResult keys:', Object.keys(cryptoResult));
+    console.log('[octane] cryptoResult sample:', JSON.stringify(cryptoResult).slice(0, 300));
+
+    // Validate crypto result has required fields
+    if (!cryptoResult.cipher || !cryptoResult.amount_commitment || !cryptoResult.zero_proof) {
+      console.error('[octane] cryptoResult missing required fields, aborting job', jobId);
+      await chrome.storage.local.set({ [storageKey]: { status: 'error', error: 'Corrupted crypto result — please retry' } });
+      await chrome.storage.local.remove([`job_${jobId}_crypto`, `job_${jobId}_params`]);
+      currentJobStorageKey = null;
+      return;
+    }
 
     // Build and submit transaction
     await chrome.storage.local.set({ [storageKey]: { status: 'running', step: `Submitting transaction...${attempt > 0 ? ` (retry ${attempt})` : ''}` } });
@@ -1751,6 +1763,7 @@ async function resumeUnshieldSubmission(jobId: string, attempt = 0) {
       blinding: cryptoResult.blinding,
       range_proof_balance: cryptoResult.range_proof_balance,
     });
+    console.log('[octane] encData length:', encData.length, 'preview:', encData.slice(0, 200));
 
     const balInfo = await rpc.getBalance(w.address);
     const nonce = balInfo.nonce + 1;
@@ -1776,7 +1789,9 @@ async function resumeUnshieldSubmission(jobId: string, attempt = 0) {
       signature: toBase64(txSig),
       public_key: toBase64(w.publicKey),
     };
+    console.log('[octane] submitting tx:', JSON.stringify({ ...tx, encrypted_data: `[${encData.length} chars]` }));
     const result = await rpc.submitTransaction(tx);
+    console.log('[octane] submit response:', JSON.stringify(result));
     await chrome.storage.local.set({ [storageKey]: { status: 'done', hash: result.hash } });
 
     // Clean up intermediate storage
