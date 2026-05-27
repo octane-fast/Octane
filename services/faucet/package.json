@@ -1,0 +1,13 @@
+{
+  "name": "octra-faucet",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "tsx server.ts",
+    "dev": "tsx --watch server.ts"
+  },
+  "dependencies": {
+    "tsx": "^4.22.0"
+  }
+}
