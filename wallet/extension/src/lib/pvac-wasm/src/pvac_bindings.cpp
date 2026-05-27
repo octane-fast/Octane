@@ -41,6 +41,30 @@ int pvac_wasm_init(const uint8_t* seed, int seed_len) {
     return (g_pk && g_sk) ? 1 : 0;
 }
 
+// Initialize from pre-serialized PVAC keys (no raw seed needed)
+EMSCRIPTEN_KEEPALIVE
+int pvac_wasm_init_from_keys(const uint8_t* sk_data, int sk_len,
+                              const uint8_t* pk_data, int pk_len) {
+    if (!sk_data || sk_len <= 0 || !pk_data || pk_len <= 0) return 0;
+    if (g_pk) { pvac_free_pubkey(g_pk); g_pk = nullptr; }
+    if (g_sk) { pvac_free_seckey(g_sk); g_sk = nullptr; }
+    if (!g_params) g_params = pvac_default_params();
+
+    g_sk = pvac_deserialize_seckey(sk_data, (size_t)sk_len);
+    g_pk = pvac_deserialize_pubkey(pk_data, (size_t)pk_len);
+
+    if (!g_sk || !g_pk) {
+        if (g_sk) { pvac_free_seckey(g_sk); g_sk = nullptr; }
+        if (g_pk) { pvac_free_pubkey(g_pk); g_pk = nullptr; }
+        return 0;
+    }
+
+    // Pre-warm the generator table (used by bulletproofs prover)
+    pvac::bp::generators().precompute(1024);
+
+    return 1;
+}
+
 // Encrypt a value and return serialized cipher
 // Returns pointer to malloc'd buffer, caller frees via pvac_wasm_free
 // Note: amount is uint32_t at the WASM boundary (max ~4294 OCT), cast to uint64_t internally
@@ -55,7 +79,22 @@ uint8_t* pvac_wasm_encrypt(uint32_t value,
     return data;
 }
 
-// Decrypt a cipher and return the value
+// Decrypt a cipher and write the 64-bit result to an output buffer.
+// Returns 1 on success, 0 on failure. Result is written as two uint32_t (lo, hi) at out_ptr.
+EMSCRIPTEN_KEEPALIVE
+int pvac_wasm_decrypt64(const uint8_t* cipher_data, int cipher_len, uint32_t* out_ptr) {
+    if (!g_pk || !g_sk || !out_ptr) return 0;
+    pvac_cipher ct = pvac_deserialize_cipher(cipher_data, (size_t)cipher_len);
+    if (!ct) return 0;
+    uint64_t lo = 0, hi = 0;
+    pvac_dec_value_fp(g_pk, g_sk, ct, &lo, &hi);
+    pvac_free_cipher(ct);
+    out_ptr[0] = (uint32_t)(lo & 0xFFFFFFFF);
+    out_ptr[1] = (uint32_t)(lo >> 32);
+    return 1;
+}
+
+// Legacy: Decrypt a cipher and return the value (truncated to uint32)
 EMSCRIPTEN_KEEPALIVE
 uint32_t pvac_wasm_decrypt(const uint8_t* cipher_data, int cipher_len) {
     pvac_cipher ct = pvac_deserialize_cipher(cipher_data, (size_t)cipher_len);
@@ -141,6 +180,16 @@ EMSCRIPTEN_KEEPALIVE
 uint8_t* pvac_wasm_get_pubkey(int* out_len) {
     size_t len = 0;
     uint8_t* data = pvac_serialize_pubkey(g_pk, &len);
+    *out_len = (int)len;
+    return data;
+}
+
+// Get serialized secret key (PVAC-only, not the ed25519 seed)
+EMSCRIPTEN_KEEPALIVE
+uint8_t* pvac_wasm_get_seckey(int* out_len) {
+    if (!g_sk) { *out_len = 0; return nullptr; }
+    size_t len = 0;
+    uint8_t* data = pvac_serialize_seckey(g_sk, &len);
     *out_len = (int)len;
     return data;
 }

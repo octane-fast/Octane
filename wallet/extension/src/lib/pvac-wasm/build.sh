@@ -40,7 +40,7 @@ $EMCC -O3 -msimd128 -mbulk-memory -flto -c \
 $EMCC -O3 -msimd128 -mbulk-memory -flto \
   -s WASM=1 \
   -s EXPORTED_RUNTIME_METHODS='["ccall","cwrap","getValue","setValue","HEAPU8"]' \
-  -s EXPORTED_FUNCTIONS='["_pvac_wasm_init","_pvac_wasm_encrypt","_pvac_wasm_decrypt","_pvac_wasm_pedersen_commit","_pvac_wasm_make_zero_proof_bound","_pvac_wasm_make_range_proof","_pvac_wasm_ct_sub","_pvac_wasm_commit_ct","_pvac_wasm_get_pubkey","_pvac_wasm_free","_pvac_wasm_aes_kat","_malloc","_free"]' \
+  -s EXPORTED_FUNCTIONS='["_pvac_wasm_init","_pvac_wasm_init_from_keys","_pvac_wasm_encrypt","_pvac_wasm_decrypt","_pvac_wasm_decrypt64","_pvac_wasm_pedersen_commit","_pvac_wasm_make_zero_proof_bound","_pvac_wasm_make_range_proof","_pvac_wasm_ct_sub","_pvac_wasm_commit_ct","_pvac_wasm_get_pubkey","_pvac_wasm_get_seckey","_pvac_wasm_free","_pvac_wasm_aes_kat","_malloc","_free"]' \
   -s ALLOW_MEMORY_GROWTH=1 \
   -s MAXIMUM_MEMORY=2147483648 \
   -s MODULARIZE=1 \

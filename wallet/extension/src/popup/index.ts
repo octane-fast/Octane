@@ -12,10 +12,11 @@ const screenSetup = document.getElementById('screen-setup')!;
 const screenCreate = document.getElementById('screen-create')!;
 const screenImport = document.getElementById('screen-import')!;
 const screenUnlock = document.getElementById('screen-unlock')!;
+const screenProverRec = document.getElementById('screen-prover-rec')!;
 const screenMain = document.getElementById('screen-main')!;
 
 function showScreen(screen: HTMLElement) {
-  [screenSetup, screenCreate, screenImport, screenUnlock, screenMain].forEach(s => s.classList.add('hidden'));
+  [screenSetup, screenCreate, screenImport, screenUnlock, screenProverRec, screenMain].forEach(s => s.classList.add('hidden'));
   screen.classList.remove('hidden');
 }
 
@@ -25,6 +26,33 @@ function showToast(msg: string, duration = 2000) {
   toast.textContent = msg;
   toast.classList.remove('hidden');
   if (duration > 0) setTimeout(() => toast.classList.add('hidden'), duration);
+}
+
+function showActionToast(msg: string, opts?: { action?: string; goActivity?: boolean; duration?: number }) {
+  const toast = document.getElementById('toast')!;
+  const actionLabel = opts?.action ?? (opts?.goActivity ? 'View' : '');
+  if (actionLabel) {
+    toast.innerHTML = `<span>${msg}</span><button class="toast-action" id="toast-act-btn">${actionLabel}</button>`;
+    toast.classList.remove('hidden');
+    document.getElementById('toast-act-btn')!.addEventListener('click', () => {
+      toast.classList.add('hidden');
+      if (opts?.goActivity) switchToTab('activity');
+    });
+  } else {
+    toast.innerHTML = '';
+    toast.textContent = msg;
+    toast.classList.remove('hidden');
+  }
+  const dur = opts?.duration ?? (actionLabel ? 5000 : 3000);
+  if (dur > 0) setTimeout(() => toast.classList.add('hidden'), dur);
+}
+
+function switchToTab(tab: string) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  const target = document.querySelector(`.tab[data-tab="${tab}"]`) as HTMLElement | null;
+  if (target) target.classList.add('active');
+  document.querySelectorAll('.tab-content').forEach(c => c.classList.add('hidden'));
+  document.getElementById(`tab-${tab}`)?.classList.remove('hidden');
 }
 
 function showStealthClaimToast(outputs: Array<Record<string, unknown>>) {
@@ -39,12 +67,11 @@ function showStealthClaimToast(outputs: Array<Record<string, unknown>>) {
         const res = await sendMsg('STEALTH_CLAIM', { id: out.id, eph_pub: out.eph_pub, enc_amount: out.enc_amount }) as { jobId?: string; amount?: string; error?: string };
         if (res.jobId) {
           await chrome.storage.local.set({ activeClaimJob: res.jobId, activeClaimStart: Date.now() });
-          const resultEl = document.getElementById('send-result')!;
-          pollJobStatus(res.jobId, resultEl, 'claim');
+          pollJobStatus(res.jobId, 'claim');
         } else if (res.error) {
-          showToast(`Claim failed: ${res.error}`);
+          showActionToast(`Claim failed: ${res.error}`, { duration: 4000 });
         }
-      } catch { showToast('Claim failed'); }
+      } catch { showActionToast('Claim failed', { duration: 3000 }); }
     }
     toast.classList.add('hidden');
   });
@@ -191,6 +218,9 @@ document.getElementById('btn-confirm-create')!.addEventListener('click', async (
   if (!pw || pw.length < 4) { showToast('Password too short'); return; }
   if (pw !== pw2) { showToast('Passwords do not match'); return; }
 
+  const pvacOverlay = document.getElementById('pvac-loading')!;
+  pvacOverlay.classList.remove('hidden');
+
   const wallet = walletFromMnemonic(mnemonic, 0);
   const encrypted = await encryptMnemonic(mnemonic, pw);
   await saveWallet({
@@ -199,7 +229,9 @@ document.getElementById('btn-confirm-create')!.addEventListener('click', async (
     activeIndex: 0,
   });
   await sendMsg('UNLOCK', { encryptedSeed: encrypted, password: pw, hdIndex: 0 });
-  await loadMainScreen();
+  await sendMsg('DERIVE_PVAC_KEYS');
+  pvacOverlay.classList.add('hidden');
+  await maybeShowProverRec();
 });
 
 // Import wallet
@@ -209,6 +241,9 @@ document.getElementById('btn-confirm-import')!.addEventListener('click', async (
   if (!isValidMnemonic(mnemonic)) { showToast('Invalid seed phrase'); return; }
   if (!pw || pw.length < 4) { showToast('Password too short'); return; }
 
+  const pvacOverlay = document.getElementById('pvac-loading')!;
+  pvacOverlay.classList.remove('hidden');
+
   const wallet = walletFromMnemonic(mnemonic, 0);
   const encrypted = await encryptMnemonic(mnemonic, pw);
   await saveWallet({
@@ -217,7 +252,9 @@ document.getElementById('btn-confirm-import')!.addEventListener('click', async (
     activeIndex: 0,
   });
   await sendMsg('UNLOCK', { encryptedSeed: encrypted, password: pw, hdIndex: 0 });
-  await loadMainScreen();
+  await sendMsg('DERIVE_PVAC_KEYS');
+  pvacOverlay.classList.add('hidden');
+  await maybeShowProverRec();
 });
 
 // Unlock
@@ -240,11 +277,25 @@ async function doUnlock() {
   try {
     const res = await sendMsg('UNLOCK', { encryptedSeed: state.encryptedSeed, password: pw, hdIndex: activeAccount.hdIndex }) as { success?: boolean; error?: string };
     if (res.error) { showToast('Incorrect password'); return; }
-    await loadMainScreen();
+    await maybeShowProverRec();
   } catch {
     showToast('Incorrect password');
   }
 }
+
+/** Show prover recommendation if no prover detected, otherwise go straight to main */
+async function maybeShowProverRec() {
+  const { proverRecDismissed } = await chrome.storage.local.get('proverRecDismissed');
+  if (proverRecDismissed) { await loadMainScreen(); return; }
+  const status = await sendMsg('GET_PROVER_STATUS') as { local?: boolean; remote?: boolean };
+  if (status.local || status.remote) { await loadMainScreen(); return; }
+  showScreen(screenProverRec);
+}
+
+document.getElementById('btn-skip-prover-rec')!.addEventListener('click', async () => {
+  await chrome.storage.local.set({ proverRecDismissed: true });
+  await loadMainScreen();
+});
 
 // Lock
 document.getElementById('btn-lock')?.addEventListener('click', async () => {
@@ -313,7 +364,7 @@ async function refreshPrivateBalance() {
   const privEl = document.getElementById('display-private-balance')!;
   try {
     const privPromise = sendMsg('GET_DECRYPTED_BALANCE') as Promise<{ balance?: string; error?: string }>;
-    const timeout = new Promise<{ error: string }>((resolve) => setTimeout(() => resolve({ error: 'timeout' }), 4000));
+    const timeout = new Promise<{ error: string }>((resolve) => setTimeout(() => resolve({ error: 'timeout' }), 8000));
     const privRes = await Promise.race([privPromise, timeout]);
     if (!privRes.error && privRes.balance !== undefined) {
       privEl.classList.remove('shimmer');
@@ -502,6 +553,11 @@ async function loadMainScreen() {
   showScreen(screenMain);
   checkActiveJob();
 
+  // Update prover mode label in header
+  const status = await sendMsg('GET_PROVER_STATUS') as { local?: boolean; remote?: boolean; mode?: string };
+  const mode = status.mode ?? 'browser';
+  updateProverModeLabel(mode);
+
   // Populate account selector from background (fresh derivation)
   const accRes = await sendMsg('GET_ACCOUNTS') as { accounts?: Array<{ name: string; hdIndex: number; address: string }>; activeHdIndex?: number; error?: string };
   const select = document.getElementById('account-select') as HTMLSelectElement;
@@ -570,8 +626,7 @@ async function loadActivity() {
         await chrome.storage.local.remove(['activeUnshieldJob', 'activeUnshieldStart', 'activeShieldJob', 'activeShieldStart', 'activeStealthJob', 'activeStealthStart', 'activeClaimJob', 'activeClaimStart']);
         pendingEl.innerHTML = '';
         if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
-        const resultEl = document.getElementById('send-result');
-        if (resultEl) resultEl.textContent = `${activeLabel} cancelled.`;
+        showActionToast(`${activeLabel} cancelled`, { duration: 3000 });
       });
     } else {
       pendingEl.innerHTML = '';
@@ -694,14 +749,18 @@ document.getElementById('btn-add-account')!.addEventListener('click', async () =
   if (!confirm('Create a new account?')) return;
   const state = await loadWallet();
   if (!state) return;
+  const pvacOverlay = document.getElementById('pvac-loading')!;
+  pvacOverlay.classList.remove('hidden');
   const nextHdIndex = Math.max(...state.accounts.map(a => a.hdIndex)) + 1;
   const name = `Account ${state.accounts.length + 1}`;
   const res = await sendMsg('ADD_ACCOUNT', { name, hdIndex: nextHdIndex }) as { address?: string; error?: string };
-  if (res.error) { showToast(res.error); return; }
+  if (res.error) { pvacOverlay.classList.add('hidden'); showToast(res.error); return; }
   state.accounts.push({ name, hdIndex: nextHdIndex, address: res.address! });
   state.activeIndex = state.accounts.length - 1;
   await saveWallet(state);
   await sendMsg('SWITCH_ACCOUNT', { hdIndex: nextHdIndex });
+  await sendMsg('DERIVE_PVAC_KEYS');
+  pvacOverlay.classList.add('hidden');
   await loadMainScreen();
   showToast(`${name} created`);
 });
@@ -805,26 +864,25 @@ document.getElementById('shield-amount')!.addEventListener('input', updateShield
 submitSendBtn.addEventListener('click', async () => {
   const amount = (document.getElementById('send-amount') as HTMLInputElement).value.trim();
   const to = (document.getElementById('send-to') as HTMLInputElement).value.trim();
-  const resultEl = document.getElementById('send-result')!;
   if (!to || !amount) { showToast('Fill in all fields'); return; }
 
   if (sendMode === 'stealth') {
-    resultEl.textContent = 'Stealth sending...';
+    showActionToast('Private transfer started', { action: 'View', goActivity: true });
     const res = await sendMsg('STEALTH_SEND', { to, amount }) as { jobId?: string; error?: string };
     if (res.error) {
-      resultEl.textContent = `Error: ${res.error}`;
+      showActionToast(`Error: ${res.error}`, { duration: 4000 });
     } else if (res.jobId) {
       await chrome.storage.local.set({ activeStealthJob: res.jobId, activeStealthStart: Date.now() });
-      pollJobStatus(res.jobId, resultEl, 'stealth');
+      pollJobStatus(res.jobId, 'stealth');
     }
   } else {
-    resultEl.textContent = 'Sending...';
+    showActionToast('Transfer started', { action: 'View', goActivity: true });
     const res = await sendMsg('SEND_TRANSACTION', { to, amount }) as { hash?: string; error?: string };
     if (res.error) {
-      resultEl.textContent = `Error: ${res.error}`;
+      showActionToast(`Error: ${res.error}`, { duration: 4000 });
     } else {
-      resultEl.innerHTML = txLink(res.hash!, 'Confirmed — View on OctraScan ↗');
-      showToast('Transaction sent!');
+      showActionToast('Transaction confirmed!', { action: 'View', goActivity: true });
+      loadActivity();
     }
   }
 });
@@ -833,24 +891,23 @@ submitSendBtn.addEventListener('click', async () => {
 submitShieldBtn.addEventListener('click', async () => {
   const amount = (document.getElementById('shield-amount') as HTMLInputElement).value.trim();
   if (!amount) { showToast('Enter an amount'); return; }
-  const resultEl = document.getElementById('shield-result')!;
   if (shieldDirection === 'shield') {
-    resultEl.textContent = 'Shielding...';
+    showActionToast('Shield started', { action: 'View', goActivity: true });
     const res = await sendMsg('ENCRYPT_BALANCE', { amount }) as { jobId?: string; error?: string };
     if (res.error) {
-      resultEl.textContent = `Error: ${res.error}`;
+      showActionToast(`Error: ${res.error}`, { duration: 4000 });
     } else if (res.jobId) {
       await chrome.storage.local.set({ activeShieldJob: res.jobId, activeShieldStart: Date.now() });
-      pollJobStatus(res.jobId, resultEl, 'shield');
+      pollJobStatus(res.jobId, 'shield');
     }
   } else {
-    resultEl.textContent = 'Unshielding...';
+    showActionToast('Unshield started', { action: 'View', goActivity: true });
     const res = await sendMsg('DECRYPT_BALANCE', { amount }) as { jobId?: string; error?: string };
     if (res.error) {
-      resultEl.textContent = `Error: ${res.error}`;
+      showActionToast(`Error: ${res.error}`, { duration: 4000 });
     } else if (res.jobId) {
       await chrome.storage.local.set({ activeUnshieldJob: res.jobId, activeUnshieldStart: Date.now() });
-      pollJobStatus(res.jobId, resultEl, 'unshield');
+      pollJobStatus(res.jobId, 'unshield');
     }
   }
 });
@@ -864,8 +921,8 @@ function escapeHtml(str: string): string {
 // --- Job polling (shield + unshield + stealth) ---
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 
-function pollJobStatus(jobId: string, resultEl: HTMLElement, jobType: 'shield' | 'unshield' | 'stealth' | 'claim' = 'unshield') {
-  const label = jobType === 'shield' ? 'Shielding' : jobType === 'stealth' ? 'Stealth sending' : jobType === 'claim' ? 'Claiming' : 'Unshielding';
+function pollJobStatus(jobId: string, jobType: 'shield' | 'unshield' | 'stealth' | 'claim' = 'unshield') {
+  const label = jobType === 'shield' ? 'Shield' : jobType === 'stealth' ? 'Private transfer' : jobType === 'claim' ? 'Claim' : 'Unshield';
   const storageKeys = jobType === 'shield'
     ? ['activeShieldJob', 'activeShieldStart']
     : jobType === 'stealth'
@@ -874,32 +931,27 @@ function pollJobStatus(jobId: string, resultEl: HTMLElement, jobType: 'shield' |
     ? ['activeClaimJob', 'activeClaimStart']
     : ['activeUnshieldJob', 'activeUnshieldStart'];
 
-  resultEl.textContent = `${label} — starting...`;
   if (pollTimer) clearInterval(pollTimer);
   pollTimer = setInterval(async () => {
     const res = await sendMsg('GET_JOB_STATUS', { jobId }) as { status: string; step?: string; prover?: string; hash?: string; error?: string };
-    if (res.status === 'running') {
-      resultEl.textContent = `${label} — ${res.step ?? 'working...'}`;
-    } else if (res.status === 'pending_unlock') {
-      resultEl.textContent = `${label} — ${res.step ?? 'waiting for unlock...'}`;
-    } else if (res.status === 'crypto_done') {
-      resultEl.textContent = `${label} — submitting transaction...`;
+    if (res.status === 'running' || res.status === 'pending_unlock' || res.status === 'crypto_done') {
+      // silently polling — toast already shown at start
     } else if (res.status === 'done') {
       clearInterval(pollTimer!);
       pollTimer = null;
       await chrome.storage.local.remove(storageKeys);
-      resultEl.innerHTML = txLink(res.hash!, 'Confirmed — View on OctraScan ↗');
-      showToast(jobType === 'shield' ? 'Funds shielded!' : jobType === 'claim' ? 'Stealth funds claimed!' : jobType === 'stealth' ? 'Stealth send complete!' : 'Funds unshielded!');
+      const doneMsg = jobType === 'shield' ? 'Funds shielded!' : jobType === 'claim' ? 'Stealth funds claimed!' : jobType === 'stealth' ? 'Private transfer complete!' : 'Funds unshielded!';
+      showActionToast(doneMsg, { action: 'View', goActivity: true });
       loadActivity();
     } else if (res.status === 'error') {
       clearInterval(pollTimer!);
       pollTimer = null;
       await chrome.storage.local.remove(storageKeys);
-      resultEl.textContent = `Error: ${res.error}`;
+      showActionToast(`${label} failed: ${res.error}`, { duration: 4000 });
     } else if (res.status === 'cancelled') {
       clearInterval(pollTimer!);
       pollTimer = null;
-      resultEl.textContent = `${label} cancelled.`;
+      showActionToast(`${label} cancelled`, { duration: 3000 });
     }
   }, 2000);
 }
@@ -907,20 +959,22 @@ function pollJobStatus(jobId: string, resultEl: HTMLElement, jobType: 'shield' |
 // Check for running jobs on popup open
 async function checkActiveJob() {
   const { activeUnshieldJob, activeShieldJob, activeStealthJob, activeClaimJob } = await chrome.storage.local.get(['activeUnshieldJob', 'activeShieldJob', 'activeStealthJob', 'activeClaimJob']);
-  const resultEl = document.getElementById('send-result')!;
   if (activeUnshieldJob) {
-    pollJobStatus(activeUnshieldJob, resultEl, 'unshield');
+    pollJobStatus(activeUnshieldJob, 'unshield');
   } else if (activeShieldJob) {
-    pollJobStatus(activeShieldJob, resultEl, 'shield');
+    pollJobStatus(activeShieldJob, 'shield');
   } else if (activeStealthJob) {
-    pollJobStatus(activeStealthJob, resultEl, 'stealth');
+    pollJobStatus(activeStealthJob, 'stealth');
   } else if (activeClaimJob) {
-    pollJobStatus(activeClaimJob, resultEl, 'claim');
+    pollJobStatus(activeClaimJob, 'claim');
   }
 }
 
 // --- Prover Settings ---
 const proverModal = document.getElementById('prover-modal')!;
+const proverModeLabel = document.getElementById('prover-mode-label')!;
+const proverModeBtn = document.getElementById('btn-prover-settings')!;
+
 document.getElementById('btn-prover-settings')!.addEventListener('click', () => {
   proverModal.classList.remove('hidden');
   refreshProverStatus();
@@ -928,15 +982,66 @@ document.getElementById('btn-prover-settings')!.addEventListener('click', () => 
 document.getElementById('prover-close')!.addEventListener('click', () => proverModal.classList.add('hidden'));
 proverModal.addEventListener('click', (e) => { if (e.target === proverModal) proverModal.classList.add('hidden'); });
 
+// Network toggle (mainnet ↔ mocknet)
+const networkLabel = document.getElementById('network-label')!;
+const MOCK_RPC = 'http://localhost:18332/rpc';
+const MAIN_RPC = 'https://octra.network/rpc';
+
+(async () => {
+  const res = await sendMsg('GET_RPC_URL') as { rpcUrl?: string };
+  networkLabel.textContent = res.rpcUrl === MOCK_RPC ? 'mocknet' : 'mainnet';
+  networkLabel.style.color = res.rpcUrl === MOCK_RPC ? '#f59e0b' : '';
+})();
+
+document.getElementById('btn-network')!.addEventListener('click', async () => {
+  const res = await sendMsg('GET_RPC_URL') as { rpcUrl?: string };
+  const isMock = res.rpcUrl === MOCK_RPC;
+  const newUrl = isMock ? MAIN_RPC : MOCK_RPC;
+  await sendMsg('SET_RPC_URL', { url: newUrl });
+  networkLabel.textContent = isMock ? 'mainnet' : 'mocknet';
+  networkLabel.style.color = isMock ? '' : '#f59e0b';
+  showToast(isMock ? 'Switched to Mainnet' : 'Switched to Mocknet');
+});
+
 async function refreshProverStatus() {
-  const res = await sendMsg('GET_PROVER_STATUS') as { local?: boolean; remote?: boolean };
-  const localDot = document.getElementById('prover-local-status')!;
-  const remoteDot = document.getElementById('prover-remote-status')!;
-  localDot.className = `prover-dot ${res.local ? 'green' : 'grey'}`;
-  remoteDot.className = `prover-dot ${res.remote ? 'green' : 'grey'}`;
+  const res = await sendMsg('GET_PROVER_STATUS') as { local?: boolean; remote?: boolean; mode?: string };
+  const localInd = document.getElementById('prover-local-indicator')!;
+  const remoteInd = document.getElementById('prover-remote-indicator')!;
+  localInd.className = `prover-indicator ${res.local ? 'online' : 'offline'}`;
+  remoteInd.className = `prover-indicator ${res.remote ? 'online' : 'offline'}`;
+
+  // Set radio to current mode
+  const currentMode = res.mode ?? (res.local ? 'local' : res.remote ? 'remote' : 'browser');
+  const radio = proverModal.querySelector(`input[value="${currentMode}"]`) as HTMLInputElement | null;
+  if (radio) radio.checked = true;
+  updateProverModeLabel(currentMode);
+
   const removeBtn = document.getElementById('btn-remove-pairing') as HTMLButtonElement;
   removeBtn.style.display = res.remote ? '' : 'none';
+
+  // Only show download CTA if neither local nor remote is available
+  const cta = document.getElementById('prover-cta')!;
+  if (res.local || res.remote) {
+    cta.classList.add('hidden');
+  } else {
+    cta.classList.remove('hidden');
+  }
 }
+
+function updateProverModeLabel(mode: string) {
+  const labels: Record<string, string> = { local: 'Desktop', remote: 'Remote', browser: 'In-Browser' };
+  proverModeLabel.textContent = labels[mode] ?? 'In-Browser';
+  proverModeBtn.className = 'prover-mode-btn' + (mode === 'local' ? ' active-local' : mode === 'remote' ? ' active-remote' : '');
+}
+
+// Radio change handler
+proverModal.querySelectorAll('input[name="prover-mode"]').forEach((radio) => {
+  radio.addEventListener('change', async (e) => {
+    const mode = (e.target as HTMLInputElement).value;
+    await sendMsg('SET_PROVER_MODE', { mode });
+    updateProverModeLabel(mode);
+  });
+});
 
 document.getElementById('prover-file-input')!.addEventListener('change', async (e) => {
   const file = (e.target as HTMLInputElement).files?.[0];

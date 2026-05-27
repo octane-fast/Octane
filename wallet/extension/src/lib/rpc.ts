@@ -1,7 +1,19 @@
 import type { RpcResponse } from './types';
 
-const RPC_URL = 'https://octra.network/rpc';
+const DEFAULT_RPC_URL = 'https://octra.network/rpc';
+let currentRpcUrl = DEFAULT_RPC_URL;
 let rpcId = 0;
+
+// Allow runtime override (set via chrome.storage.local 'rpcUrl')
+export function setRpcUrl(url: string) { currentRpcUrl = url; }
+export function getRpcUrl(): string { return currentRpcUrl; }
+
+// Load saved RPC URL on startup
+try {
+  chrome.storage.local.get('rpcUrl').then(({ rpcUrl }) => {
+    if (rpcUrl) currentRpcUrl = rpcUrl;
+  });
+} catch { /* not in extension context */ }
 
 // Write operations: slower backoff, tolerant of 429s
 const WRITE_MAX_RETRIES = 6;
@@ -24,7 +36,7 @@ async function rpcCall(method: string, params: unknown[] = [], opts?: { fast?: b
     try {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
-      const res = await fetch(RPC_URL, {
+      const res = await fetch(currentRpcUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

@@ -94,11 +94,29 @@
       <div id="tor-status" class="tor-status"></div>
     </div>
 
+    <!-- Prover Recommendation (shown after unlock/create if no prover) -->
+    <div id="screen-prover-rec" class="screen hidden">
+      <div class="prover-rec-content">
+        <svg class="prover-rec-icon" viewBox="0 0 24 24" fill="none" stroke="#2662e7" stroke-width="1.5" width="48" height="48"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+        <h2>Get Octane Accelerator</h2>
+        <p class="prover-rec-desc">For instant private balance and fast shield/unshield operations, install the Octane Accelerator desktop app.</p>
+        <ul class="prover-rec-benefits">
+          <li>⚡ Instant balance decryption</li>
+          <li>⚡ Proofs in seconds (not minutes)</li>
+          <li>⚡ Runs locally — your keys stay private</li>
+        </ul>
+        <button class="primary prover-rec-btn" onclick="window.open('https://octane-fast.github.io/octane-accelerator/','_blank')">Download Octane Accelerator ↗</button>
+        <button id="btn-skip-prover-rec" class="link">Skip for now</button>
+      </div>
+    </div>
+
     <!-- Main Dashboard -->
     <div id="screen-main" class="screen hidden">
       <div class="header">
         <svg class="header-logo" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg"><rect width="128" height="128" rx="14" fill="#060d1f"/><circle cx="64" cy="64" r="58" fill="none" stroke="rgba(26,86,219,0.15)" stroke-width="0.5"/><circle cx="64" cy="64" r="53" fill="none" stroke="rgba(26,86,219,0.3)" stroke-width="0.5"/><circle cx="64" cy="64" r="48" fill="#1a56db"/><circle cx="64" cy="64" r="48" fill="none" stroke="#1a56db" stroke-width="1.5"/><circle cx="64" cy="64" r="38" fill="#060d1f"/><circle cx="64" cy="64" r="34" fill="none" stroke="rgba(96,165,250,0.4)" stroke-width="0.75"/><g transform="translate(64,64) scale(0.42) translate(-196,-200)"><path fill="#fff" d="M196,268 C170,268 152,248 152,224 C152,204 162,192 170,180 C174,174 176,166 174,156 C180,162 184,170 184,180 C184,170 190,154 200,142 C200,154 206,164 214,170 C220,158 218,146 214,136 C226,148 240,168 240,192 C240,204 236,214 228,222 C224,212 222,200 224,190 C216,202 212,218 214,232 C210,226 208,218 208,210 C204,220 202,240 208,254 C204,260 200,264 196,268 Z"/></g></svg>
         <div class="header-actions">
+          <button id="btn-prover-settings" class="prover-mode-btn" title="Prover Settings"><span id="prover-mode-label">In-Browser</span></button>
+          <button id="btn-network" class="prover-mode-btn" title="Network" style="font-size:0.65rem; position:relative; left:-4px;"><span id="network-label">mainnet</span></button>
           <label class="toggle-row compact">
             <span class="toggle-label">Tor</span>
             <input type="checkbox" id="tor-toggle-main">
@@ -120,7 +138,7 @@
             <span class="balance-sub"><span class="balance-sub-label">Public</span> <span id="display-public-balance">0.00</span></span>
             <span class="balance-sub"><span class="balance-sub-label">Private</span> <span id="display-private-balance" class="shimmer">···</span></span>
           </div>
-          <button id="btn-get-octra" class="get-octra-btn" onclick="window.open('https://octra.org/get','_blank')">Get OCT</button>
+          <button id="btn-get-octra" class="get-octra-btn" onclick="window.open('https://octane.fast/get-oct','_blank')">Get OCT</button>
         </div>
       </div>
       <div class="tabs">
@@ -161,6 +179,15 @@
 
     <div id="toast" class="toast hidden"></div>
 
+    <!-- PVAC Key Derivation Overlay -->
+    <div id="pvac-loading" class="modal-overlay hidden">
+      <div class="modal" style="text-align:center;padding:2rem;">
+        <div class="shimmer" style="width:40px;height:40px;border-radius:50%;margin:0 auto 1rem;"></div>
+        <p style="margin:0;font-size:0.95rem;">Generating privacy keys…</p>
+        <p class="muted" style="margin:0.5rem 0 0;font-size:0.8rem;">This only happens once per account.</p>
+      </div>
+    </div>
+
     <!-- octUSD Swap Modal -->
     <div id="swap-modal" class="modal-overlay hidden">
       <div class="modal">
@@ -181,6 +208,51 @@
           </div>
           <button id="btn-swap-confirm" class="primary" disabled>Confirm Swap</button>
           <div id="swap-result" class="result"></div>
+        </div>
+      </div>
+    </div>
+    <!-- Prover Settings Modal -->
+    <div id="prover-modal" class="modal-overlay hidden">
+      <div class="modal">
+        <div class="modal-header">
+          <h3>Prover Mode</h3>
+          <button id="prover-close" class="modal-close">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="prover-radio-group">
+            <label class="prover-radio-option" id="prover-opt-local">
+              <input type="radio" name="prover-mode" value="local">
+              <div class="prover-radio-content">
+                <span class="prover-radio-title">Local (Desktop)</span>
+                <span class="prover-radio-desc">Uses Octane Accelerator on this machine</span>
+              </div>
+              <span id="prover-local-indicator" class="prover-indicator"></span>
+            </label>
+            <label class="prover-radio-option has-extra" id="prover-opt-remote">
+              <input type="radio" name="prover-mode" value="remote">
+              <div class="prover-radio-content">
+                <span class="prover-radio-title">Remote</span>
+                <span class="prover-radio-desc">Uses a paired accelerator via relay</span>
+                <div class="prover-pairing-section">
+                  <label class="file-input-label secondary" for="prover-file-input">Import Pairing File</label>
+                  <input type="file" id="prover-file-input" accept=".pair" class="hidden">
+                  <button id="btn-remove-pairing" class="link" style="display:none">Remove Pairing</button>
+                </div>
+              </div>
+              <span id="prover-remote-indicator" class="prover-indicator"></span>
+            </label>
+            <label class="prover-radio-option not-recommended" id="prover-opt-browser">
+              <input type="radio" name="prover-mode" value="browser">
+              <div class="prover-radio-content">
+                <span class="prover-radio-title">In-Browser <span class="badge-warn">Not Recommended</span></span>
+                <span class="prover-radio-desc">Slow WASM fallback — proofs take minutes</span>
+              </div>
+            </label>
+          </div>
+          <div id="prover-cta" class="prover-cta hidden">
+            <p class="prover-cta-text">Get the Octane Accelerator for instant proofs and private balance decryption.</p>
+            <button class="primary prover-cta-btn" onclick="window.open('https://octane-fast.github.io/octane-accelerator/','_blank')">Download Octane Accelerator ↗</button>
+          </div>
         </div>
       </div>
     </div>

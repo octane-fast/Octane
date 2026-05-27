@@ -1,11 +1,12 @@
 {
   "name": "octra-wallet",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite build --watch",
     "build": "vite build",
+    "mock-rpc": "tsx mock-rpc/server.ts",
     "package": "vite build && cd .. && zip -r octane-wallet.zip extension/dist extension/icons extension/manifest.json extension/offscreen.html -x '*.DS_Store'"
   },
   "dependencies": {
@@ -16,6 +17,7 @@
   },
   "devDependencies": {
     "canvas": "^3.2.3",
+    "tsx": "^4.22.3",
     "typescript": "^5.4.0",
     "vite": "^5.4.0"
   }

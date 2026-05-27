@@ -29,6 +29,19 @@ export async function initPvac(secretKey32: Uint8Array): Promise<boolean> {
   return initialized;
 }
 
+export async function initPvacFromKeys(skBytes: Uint8Array, pkBytes: Uint8Array): Promise<boolean> {
+  await loadModule();
+  const skPtr = module._malloc(skBytes.length);
+  module.HEAPU8.set(skBytes, skPtr);
+  const pkPtr = module._malloc(pkBytes.length);
+  module.HEAPU8.set(pkBytes, pkPtr);
+  const ok = module._pvac_wasm_init_from_keys(skPtr, skBytes.length, pkPtr, pkBytes.length);
+  module._free(skPtr);
+  module._free(pkPtr);
+  initialized = ok === 1;
+  return initialized;
+}
+
 export function isInitialized(): boolean {
   return initialized;
 }
@@ -145,6 +158,18 @@ export function getPubkey(): Uint8Array {
   const outLenPtr = module._malloc(4);
   const dataPtr = module._pvac_wasm_get_pubkey(outLenPtr);
   const outLen = module.getValue(outLenPtr, 'i32');
+  const result = new Uint8Array(module.HEAPU8.buffer, dataPtr, outLen).slice();
+  module._pvac_wasm_free(dataPtr);
+  module._free(outLenPtr);
+  return result;
+}
+
+export function getSeckey(): Uint8Array {
+  if (!initialized) throw new Error('PVAC not initialized');
+  const outLenPtr = module._malloc(4);
+  const dataPtr = module._pvac_wasm_get_seckey(outLenPtr);
+  const outLen = module.getValue(outLenPtr, 'i32');
+  if (!dataPtr || outLen === 0) { module._free(outLenPtr); return new Uint8Array(0); }
   const result = new Uint8Array(module.HEAPU8.buffer, dataPtr, outLen).slice();
   module._pvac_wasm_free(dataPtr);
   module._free(outLenPtr);

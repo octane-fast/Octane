@@ -6,6 +6,7 @@ import PvacModuleFactory from '../lib/pvac-wasm/pvac.js';
 
 let module: any = null;
 let initialized = false;
+let initializedKeyId: string | null = null;
 
 async function ensureModule(): Promise<any> {
   if (module) return module;
@@ -13,11 +14,14 @@ async function ensureModule(): Promise<any> {
   return module;
 }
 
-function initPvac(secretKey32: Uint8Array): boolean {
-  const seedPtr = module._malloc(32);
-  module.HEAPU8.set(secretKey32.slice(0, 32), seedPtr);
-  const ok = module._pvac_wasm_init(seedPtr, 32);
-  module._free(seedPtr);
+function initPvacFromKeys(skBytes: Uint8Array, pkBytes: Uint8Array): boolean {
+  const skPtr = module._malloc(skBytes.length);
+  module.HEAPU8.set(skBytes, skPtr);
+  const pkPtr = module._malloc(pkBytes.length);
+  module.HEAPU8.set(pkBytes, pkPtr);
+  const ok = module._pvac_wasm_init_from_keys(skPtr, skBytes.length, pkPtr, pkBytes.length);
+  module._free(skPtr);
+  module._free(pkPtr);
   initialized = ok === 1;
   return initialized;
 }
@@ -38,9 +42,27 @@ function encryptValue(amountRaw: bigint, randomSeed: Uint8Array): Uint8Array {
 function decryptValue(cipherData: Uint8Array): bigint {
   const ptr = module._malloc(cipherData.length);
   module.HEAPU8.set(cipherData, ptr);
+
+  // Use 64-bit output pointer variant if available
+  if (module._pvac_wasm_decrypt64) {
+    const outPtr = module._malloc(8); // two uint32_t
+    const ok = module._pvac_wasm_decrypt64(ptr, cipherData.length, outPtr);
+    if (ok === 1) {
+      const lo = module.getValue(outPtr, 'i32') >>> 0;       // unsigned lower 32 bits
+      const hi = module.getValue(outPtr + 4, 'i32') >>> 0;   // unsigned upper 32 bits
+      module._free(outPtr);
+      module._free(ptr);
+      return BigInt(hi) * 0x100000000n + BigInt(lo);
+    }
+    module._free(outPtr);
+    module._free(ptr);
+    return 0n; // decrypt failed (null keys or bad cipher)
+  }
+
+  // Fallback: old 32-bit function (treat as unsigned)
   const val = module._pvac_wasm_decrypt(ptr, cipherData.length);
   module._free(ptr);
-  return BigInt(val);
+  return BigInt(val >>> 0);
 }
 
 function pedersenCommit(amount: bigint, blinding: Uint8Array): Uint8Array {
@@ -109,6 +131,7 @@ function toBase64(bytes: Uint8Array): string {
 }
 
 function fromBase64(b64: string): Uint8Array {
+  if (!b64) return new Uint8Array(0);
   const binary = atob(b64);
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
@@ -128,8 +151,10 @@ self.onmessage = async (ev: MessageEvent) => {
 
     switch (msg.action) {
       case 'init': {
-        const key = fromBase64(msg.secretKeyB64);
-        const ok = initPvac(key);
+        const sk = fromBase64(msg.pvacSkB64);
+        const pk = fromBase64(msg.pvacPkB64);
+        const ok = initPvacFromKeys(sk, pk);
+        initializedKeyId = msg.keyId;
         self.postMessage({ type: 'result', data: { ok } });
         break;
       }
@@ -139,12 +164,14 @@ self.onmessage = async (ev: MessageEvent) => {
         const seedBytes = fromBase64(msg.seedB64);
         const blindingBytes = fromBase64(msg.blindingB64);
 
-        if (!initialized) {
-          const key = fromBase64(msg.secretKeyB64);
-          if (!initPvac(key)) {
+        if (!initialized || msg.keyId !== initializedKeyId) {
+          const sk = fromBase64(msg.pvacSkB64);
+          const pk = fromBase64(msg.pvacPkB64);
+          if (!initPvacFromKeys(sk, pk)) {
             self.postMessage({ type: 'result', data: { error: 'PVAC init failed' } });
             return;
           }
+          initializedKeyId = msg.keyId;
         }
 
         const currentDecrypted = decryptValue(currentCipherBytes);
@@ -183,9 +210,12 @@ self.onmessage = async (ev: MessageEvent) => {
         break;
       }
       case 'decrypt': {
-        if (!initialized) {
-          const key = fromBase64(msg.secretKeyB64);
-          initPvac(key);
+        // Re-init if key differs from last init
+        if (!initialized || msg.keyId !== initializedKeyId) {
+          const sk = fromBase64(msg.pvacSkB64);
+          const pk = fromBase64(msg.pvacPkB64);
+          initPvacFromKeys(sk, pk);
+          initializedKeyId = msg.keyId;
         }
         const cipherBytes = fromBase64(msg.cipherB64);
         const val = decryptValue(cipherBytes);

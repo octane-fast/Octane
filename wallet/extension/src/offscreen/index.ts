@@ -92,7 +92,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       }
     };
     worker.addEventListener('message', handler);
-    worker.postMessage({ action: 'decrypt', secretKeyB64: msg.secretKeyB64, cipherB64: msg.cipherB64 });
+    worker.postMessage({ action: 'decrypt', pvacSkB64: msg.pvacSkB64, pvacPkB64: msg.pvacPkB64, keyId: msg.keyId, cipherB64: msg.cipherB64 });
     return true; // async sendResponse
   }
 });

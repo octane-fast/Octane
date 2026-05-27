@@ -209,13 +209,10 @@ export async function prepareStealthSend(
  * @param expectedTag - Stealth tag from the output (16 bytes)
  */
 export function checkStealthOutput(
-  edSk: Uint8Array,
+  x25519Sk: Uint8Array,
   ephPub: Uint8Array,
   expectedTag: Uint8Array,
 ): Uint8Array | null {
-  // Convert our ed25519 sk → X25519 sk
-  const x25519Sk = edSkToX25519(edSk);
-
   // ECDH with ephemeral pub
   const shared = x25519SharedSecret(x25519Sk, ephPub);
 
