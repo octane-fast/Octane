@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PVAC Proof Demo — Octra</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0d0d12; color: #e4e4e7; min-height: 100vh; padding: 40px 20px; }
+    .container { max-width: 640px; margin: 0 auto; }
+    h1 { font-size: 24px; margin-bottom: 8px; }
+    .subtitle { color: #a1a1aa; font-size: 14px; margin-bottom: 32px; }
+    .card { background: #18181b; border: 1px solid #27272a; border-radius: 12px; padding: 20px; margin-bottom: 16px; }
+    .card h2 { font-size: 16px; margin-bottom: 12px; color: #f4f4f5; }
+    .card p { font-size: 13px; color: #a1a1aa; margin-bottom: 12px; }
+    label { display: block; font-size: 12px; color: #a1a1aa; margin-bottom: 4px; }
+    input { width: 100%; padding: 8px 12px; border: 1px solid #3f3f46; border-radius: 6px; background: #09090b; color: #e4e4e7; font-size: 14px; margin-bottom: 12px; }
+    input:focus { outline: none; border-color: #6366f1; }
+    button { padding: 8px 16px; border: none; border-radius: 6px; background: #6366f1; color: #fff; font-size: 13px; font-weight: 600; cursor: pointer; transition: background 0.15s; }
+    button:hover { background: #4f46e5; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .result { margin-top: 12px; padding: 10px; background: #09090b; border: 1px solid #27272a; border-radius: 6px; font-size: 12px; font-family: 'SF Mono', monospace; word-break: break-all; white-space: pre-wrap; max-height: 200px; overflow-y: auto; }
+    .result.error { border-color: #dc2626; color: #f87171; }
+    .result.success { border-color: #16a34a; color: #4ade80; }
+    .status { font-size: 12px; color: #a1a1aa; margin-bottom: 16px; }
+    .status.connected { color: #4ade80; }
+    .row { display: flex; gap: 8px; align-items: flex-end; }
+    .row > * { flex: 1; }
+    .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>PVAC Proof Demo</h1>
+    <p class="subtitle">Generate FHE encryptions, range proofs, and zero-knowledge proofs using the Octra wallet.</p>
+
+    <div class="card">
+      <h2>Connection</h2>
+      <p id="status" class="status">Not connected</p>
+      <button id="btn-connect">Connect Wallet</button>
+      <div id="connect-result" class="result" style="display:none"></div>
+    </div>
+
+    <div class="card">
+      <h2>1. Encrypt a Value (FHE)</h2>
+      <p>Encrypt an integer using your PVAC key. The ciphertext is fully homomorphic.</p>
+      <label>Value (integer)</label>
+      <input type="number" id="encrypt-value" placeholder="e.g. 42">
+      <button id="btn-encrypt">Encrypt</button>
+      <div id="encrypt-result" class="result" style="display:none"></div>
+    </div>
+
+    <div class="card">
+      <h2>2. Decrypt a Ciphertext</h2>
+      <p>Decrypt a PVAC ciphertext back to its plaintext value. Requires user approval.</p>
+      <label>Ciphertext (base64)</label>
+      <input type="text" id="decrypt-ct" placeholder="Paste ciphertext from step 1">
+      <button id="btn-decrypt">Decrypt</button>
+      <div id="decrypt-result" class="result" style="display:none"></div>
+    </div>
+
+    <div class="card">
+      <h2>3. Range Proof</h2>
+      <p>Prove that a ciphertext contains a value within the valid range, without revealing it.</p>
+      <label>Ciphertext (base64)</label>
+      <input type="text" id="range-ct" placeholder="Paste ciphertext">
+      <label>Value (must match encrypted value)</label>
+      <input type="number" id="range-value" placeholder="e.g. 42">
+      <button id="btn-range">Generate Range Proof</button>
+      <div id="range-result" class="result" style="display:none"></div>
+    </div>
+
+    <div class="card">
+      <h2>4. Pedersen Commitment</h2>
+      <p>Create a binding commitment to a value. Reveals nothing about the value.</p>
+      <label>Value (integer)</label>
+      <input type="number" id="commit-value" placeholder="e.g. 100">
+      <button id="btn-commit">Commit</button>
+      <div id="commit-result" class="result" style="display:none"></div>
+    </div>
+
+    <div class="card">
+      <h2>5. Get PVAC Public Key</h2>
+      <p>Retrieve your PVAC public key for third-party verification or key exchange.</p>
+      <button id="btn-pubkey">Get Public Key</button>
+      <div id="pubkey-result" class="result" style="display:none"></div>
+    </div>
+  </div>
+
+  <script>
+    function showResult(id, data, isError) {
+      const el = document.getElementById(id);
+      el.style.display = 'block';
+      el.className = 'result ' + (isError ? 'error' : 'success');
+      el.textContent = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+    }
+
+    async function call(method, params) {
+      if (!window.octra) throw new Error('Octra wallet not detected. Install the extension.');
+      return window.octra.request({ method, params });
+    }
+
+    document.getElementById('btn-connect').addEventListener('click', async () => {
+      try {
+        const accounts = await call('octra_requestAccounts');
+        document.getElementById('status').textContent = 'Connected: ' + accounts[0];
+        document.getElementById('status').className = 'status connected';
+        showResult('connect-result', { address: accounts[0] });
+      } catch (e) {
+        showResult('connect-result', e.message, true);
+      }
+    });
+
+    document.getElementById('btn-encrypt').addEventListener('click', async () => {
+      const value = parseInt(document.getElementById('encrypt-value').value);
+      if (isNaN(value)) { showResult('encrypt-result', 'Enter a valid integer', true); return; }
+      try {
+        const res = await call('octra_pvac_encrypt', [{ value }]);
+        showResult('encrypt-result', res);
+        // Auto-fill decrypt and range fields
+        if (res.ciphertext) {
+          document.getElementById('decrypt-ct').value = res.ciphertext;
+          document.getElementById('range-ct').value = res.ciphertext;
+          document.getElementById('range-value').value = value;
+        }
+      } catch (e) { showResult('encrypt-result', e.message, true); }
+    });
+
+    document.getElementById('btn-decrypt').addEventListener('click', async () => {
+      const ct = document.getElementById('decrypt-ct').value.trim();
+      if (!ct) { showResult('decrypt-result', 'Enter a ciphertext', true); return; }
+      try {
+        const res = await call('octra_pvac_decrypt', [{ ciphertext: ct }]);
+        showResult('decrypt-result', res);
+      } catch (e) { showResult('decrypt-result', e.message, true); }
+    });
+
+    document.getElementById('btn-range').addEventListener('click', async () => {
+      const ct = document.getElementById('range-ct').value.trim();
+      const value = parseInt(document.getElementById('range-value').value);
+      if (!ct || isNaN(value)) { showResult('range-result', 'Fill in both fields', true); return; }
+      try {
+        const res = await call('octra_pvac_rangeProof', [{ ciphertext: ct, value }]);
+        showResult('range-result', res);
+      } catch (e) { showResult('range-result', e.message, true); }
+    });
+
+    document.getElementById('btn-commit').addEventListener('click', async () => {
+      const value = parseInt(document.getElementById('commit-value').value);
+      if (isNaN(value)) { showResult('commit-result', 'Enter a valid integer', true); return; }
+      try {
+        const res = await call('octra_pvac_commit', [{ value }]);
+        showResult('commit-result', res);
+      } catch (e) { showResult('commit-result', e.message, true); }
+    });
+
+    document.getElementById('btn-pubkey').addEventListener('click', async () => {
+      try {
+        const res = await call('octra_pvac_getPubkey');
+        showResult('pubkey-result', res);
+      } catch (e) { showResult('pubkey-result', e.message, true); }
+    });
+
+    // Check if wallet is already connected
+    if (window.octra) {
+      call('octra_accounts').then(accounts => {
+        if (accounts && accounts.length > 0) {
+          document.getElementById('status').textContent = 'Connected: ' + accounts[0];
+          document.getElementById('status').className = 'status connected';
+        }
+      }).catch(() => {});
+    }
+  </script>
+</body>
+</html>

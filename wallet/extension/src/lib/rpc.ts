@@ -156,9 +156,16 @@ export async function getNetworkInfo(): Promise<Record<string, unknown>> {
 }
 
 export async function getPublicKey(address: string): Promise<{ public_key: string | null }> {
-  const result = await rpcCall('octra_publicKey', [address], { fast: true }) as Record<string, unknown>;
-  const pk = result.public_key;
-  return { public_key: pk && typeof pk === 'string' ? pk : null };
+  try {
+    const result = await rpcCall('octra_publicKey', [address], { fast: true }) as Record<string, unknown>;
+    const pk = result.public_key;
+    return { public_key: pk && typeof pk === 'string' ? pk : null };
+  } catch (err) {
+    const msg = (err as Error).message ?? '';
+    // "not found" means no key registered — not a network error
+    if (msg.includes('not found')) return { public_key: null };
+    throw err;
+  }
 }
 
 export async function registerPublicKey(
@@ -166,7 +173,7 @@ export async function registerPublicKey(
   pubB64: string,
   sigB64: string,
 ): Promise<void> {
-  await rpcCall('octra_registerPublicKey', [address, pubB64, sigB64]);
+  await rpcCall('octra_registerPublicKey', [address, pubB64, sigB64], { fast: true });
 }
 
 export async function getPvacPubkey(address: string): Promise<string | null> {

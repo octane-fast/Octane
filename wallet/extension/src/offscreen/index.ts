@@ -95,4 +95,17 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     worker.postMessage({ action: 'decrypt', pvacSkB64: msg.pvacSkB64, pvacPkB64: msg.pvacPkB64, keyId: msg.keyId, cipherB64: msg.cipherB64 });
     return true; // async sendResponse
   }
+  // PVAC proof API actions — relay to worker
+  const PVAC_ACTIONS = ['pvac_encrypt', 'pvac_decrypt', 'pvac_rangeProof', 'pvac_commit', 'pvac_zeroProof', 'pvac_ctSub'];
+  if (PVAC_ACTIONS.includes(msg.action)) {
+    const handler = (ev: MessageEvent) => {
+      if (ev.data.type === 'result') {
+        worker.removeEventListener('message', handler);
+        sendResponse(ev.data.data);
+      }
+    };
+    worker.addEventListener('message', handler);
+    worker.postMessage({ ...msg, action: msg.action });
+    return true;
+  }
 });

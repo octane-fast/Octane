@@ -1,11 +1,19 @@
-const EXPLORER_BASE = 'https://octrascan.io';
+const MAINNET_EXPLORER = 'https://octrascan.io';
+const DEVNET_EXPLORER = 'https://devnet.octrascan.io';
+const DEVNET_RPC = 'https://devnet.octrascan.io/rpc';
+
+let explorerBase = MAINNET_EXPLORER;
+
+export function setExplorerFromRpc(rpcUrl: string) {
+  explorerBase = rpcUrl === DEVNET_RPC ? DEVNET_EXPLORER : MAINNET_EXPLORER;
+}
 
 export function txUrl(hash: string): string {
-  return `${EXPLORER_BASE}/tx.html?hash=${hash}`;
+  return `${explorerBase}/tx.html?hash=${hash}`;
 }
 
 export function addressUrl(address: string): string {
-  return `${EXPLORER_BASE}/address.html?addr=${address}`;
+  return `${explorerBase}/address.html?addr=${address}`;
 }
 
 export function txLink(hash: string, label?: string): string {

@@ -2,10 +2,13 @@ import { createMnemonic, isValidMnemonic, walletFromMnemonic } from '../lib/cryp
 import { encryptMnemonic, saveWallet, loadWallet, hasWallet, clearWallet } from '../lib/storage';
 import type { Account } from '../lib/storage';
 import { toBase64 } from '../lib/crypto';
-import { txUrl, txLink } from '../lib/explorer';
+import { txUrl, txLink, setExplorerFromRpc } from '../lib/explorer';
 
 // Feature flags (must match background)
 const FEATURE_TOR = true;
+
+// Account epoch — incremented on every account switch to discard stale async results
+let accountEpoch = 0;
 
 // Screens
 const screenSetup = document.getElementById('screen-setup')!;
@@ -20,7 +23,7 @@ function showScreen(screen: HTMLElement) {
   screen.classList.remove('hidden');
 }
 
-function showToast(msg: string, duration = 2000) {
+function showToast(msg: string, duration = 3500) {
   const toast = document.getElementById('toast')!;
   toast.innerHTML = '';
   toast.textContent = msg;
@@ -43,7 +46,7 @@ function showActionToast(msg: string, opts?: { action?: string; goActivity?: boo
     toast.textContent = msg;
     toast.classList.remove('hidden');
   }
-  const dur = opts?.duration ?? (actionLabel ? 5000 : 3000);
+  const dur = opts?.duration ?? (actionLabel ? 8000 : 4000);
   if (dur > 0) setTimeout(() => toast.classList.add('hidden'), dur);
 }
 
@@ -53,27 +56,39 @@ function switchToTab(tab: string) {
   if (target) target.classList.add('active');
   document.querySelectorAll('.tab-content').forEach(c => c.classList.add('hidden'));
   document.getElementById(`tab-${tab}`)?.classList.remove('hidden');
+  if (tab === 'activity') loadActivity();
 }
 
 function showStealthClaimToast(outputs: Array<Record<string, unknown>>) {
   const toast = document.getElementById('toast')!;
   const count = outputs.length;
-  toast.innerHTML = `<span>🔒 ${count} stealth payment${count > 1 ? 's' : ''} available</span><button id="toast-claim-all" class="toast-action">Claim</button>`;
+  toast.innerHTML = `<span><svg class="icon-sm" viewBox="0 0 24 24" fill="currentColor" stroke="none" style="vertical-align:-2px;margin-right:4px"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4" fill="none" stroke="currentColor" stroke-width="2"/></svg>${count} stealth payment${count > 1 ? 's' : ''} available</span><button id="toast-claim-all" class="toast-action">Claim</button>`;
   toast.classList.remove('hidden');
   document.getElementById('toast-claim-all')!.addEventListener('click', async () => {
-    toast.innerHTML = '<span>Claiming...</span>';
+    toast.classList.add('hidden');
+    // Pre-populate a placeholder job so loadActivity shows "In Progress" immediately
+    const placeholderJobId = 'claim_pending_' + Date.now();
+    await chrome.storage.local.set({ activeClaimJob: placeholderJobId, activeClaimStart: Date.now(), activeClaimAmount: '' });
+    switchToTab('activity');
     for (const out of outputs) {
       try {
         const res = await sendMsg('STEALTH_CLAIM', { id: out.id, eph_pub: out.eph_pub, enc_amount: out.enc_amount }) as { jobId?: string; amount?: string; error?: string };
         if (res.jobId) {
-          await chrome.storage.local.set({ activeClaimJob: res.jobId, activeClaimStart: Date.now() });
+          const claimAmount = res.amount ?? '';
+          await chrome.storage.local.set({ activeClaimJob: res.jobId, activeClaimStart: Date.now(), activeClaimAmount: claimAmount });
           pollJobStatus(res.jobId, 'claim');
+          loadActivity();
         } else if (res.error) {
+          await chrome.storage.local.remove(['activeClaimJob', 'activeClaimStart', 'activeClaimAmount']);
+          document.getElementById('activity-pending')!.innerHTML = '';
           showActionToast(`Claim failed: ${res.error}`, { duration: 4000 });
         }
-      } catch { showActionToast('Claim failed', { duration: 3000 }); }
+      } catch {
+        await chrome.storage.local.remove(['activeClaimJob', 'activeClaimStart', 'activeClaimAmount']);
+        document.getElementById('activity-pending')!.innerHTML = '';
+        showActionToast('Claim failed', { duration: 3000 });
+      }
     }
-    toast.classList.add('hidden');
   });
 }
 
@@ -297,6 +312,17 @@ document.getElementById('btn-skip-prover-rec')!.addEventListener('click', async 
   await loadMainScreen();
 });
 
+// External links (no inline onclick — CSP)
+document.getElementById('btn-get-octra')!.addEventListener('click', () => {
+  window.open('https://octane.fast/get-oct', '_blank');
+});
+document.getElementById('btn-download-accelerator')!.addEventListener('click', () => {
+  window.open('https://octane-fast.github.io/octane-accelerator/', '_blank');
+});
+document.getElementById('btn-download-accelerator-cta')!.addEventListener('click', () => {
+  window.open('https://octane-fast.github.io/octane-accelerator/', '_blank');
+});
+
 // Lock
 document.getElementById('btn-lock')?.addEventListener('click', async () => {
   await sendMsg('LOCK');
@@ -309,6 +335,15 @@ document.getElementById('btn-copy-address')!.addEventListener('click', () => {
   navigator.clipboard.writeText(addr);
   showToast('Copied!');
 });
+
+// Tooltip for account icons
+const acctTooltip = document.getElementById('account-tooltip')!;
+function bindTip(el: HTMLElement, text: string) {
+  el.addEventListener('mouseenter', () => { acctTooltip.textContent = text; });
+}
+bindTip(document.getElementById('stealth-badge')!, 'Stealth ready');
+bindTip(document.getElementById('btn-copy-address')!, 'Copy address');
+bindTip(document.getElementById('btn-add-account')!, 'Add account');
 
 // Tabs
 document.querySelectorAll('.tab').forEach(tab => {
@@ -347,25 +382,35 @@ function updateGetOctButton(total: number) {
   if (getBtn) getBtn.style.display = total > 0 ? 'none' : '';
 }
 
+function formatTotal(n: number): string {
+  const s = n.toFixed(6).replace(/0+$/, '').replace(/\.$/, '');
+  const [int, frac = ''] = s.split('.');
+  return int + '.' + (frac + '00').slice(0, Math.max(2, frac.length));
+}
+
 async function refreshPublicBalance() {
+  const epoch = accountEpoch;
   const balRes = await sendMsg('GET_BALANCE') as { formatted?: string; error?: string };
+  if (epoch !== accountEpoch) return; // stale
   const publicBal = balRes.formatted ?? '0';
   document.getElementById('display-public-balance')!.textContent = publicBal;
   const pub = parseFloat(publicBal) || 0;
   const privEl = document.getElementById('display-private-balance')!;
   const priv = parseFloat(privEl.textContent || '0') || 0;
   const total = pub + priv;
-  document.getElementById('display-balance')!.textContent = `${total.toFixed(2)} OCT`;
+  document.getElementById('display-balance')!.textContent = `${formatTotal(total)} OCT`;
   updateGetOctButton(total);
   await updateBalanceCache(total);
 }
 
 async function refreshPrivateBalance() {
+  const epoch = accountEpoch;
   const privEl = document.getElementById('display-private-balance')!;
   try {
     const privPromise = sendMsg('GET_DECRYPTED_BALANCE') as Promise<{ balance?: string; error?: string }>;
     const timeout = new Promise<{ error: string }>((resolve) => setTimeout(() => resolve({ error: 'timeout' }), 8000));
     const privRes = await Promise.race([privPromise, timeout]);
+    if (epoch !== accountEpoch) return; // stale
     if (!privRes.error && privRes.balance !== undefined) {
       privEl.classList.remove('shimmer');
       privEl.textContent = privRes.balance;
@@ -374,7 +419,7 @@ async function refreshPrivateBalance() {
       const pub = parseFloat(pubEl.textContent || '0') || 0;
       const priv = parseFloat(privRes.balance) || 0;
       const total = pub + priv;
-      document.getElementById('display-balance')!.textContent = `${total.toFixed(2)} OCT`;
+      document.getElementById('display-balance')!.textContent = `${formatTotal(total)} OCT`;
       updateGetOctButton(total);
       await updateBalanceCache(total);
     }
@@ -382,7 +427,9 @@ async function refreshPrivateBalance() {
 }
 
 async function refreshTokens() {
+  const epoch = accountEpoch;
   const tokRes = await sendMsg('GET_TOKENS') as { tokens?: Array<{ name: string; symbol: string; balance: string; decimals: number }> };
+  if (epoch !== accountEpoch) return; // stale
 
   // Find octUSD balance from token list (used by swap modal)
   const octUsd = tokRes.tokens?.find(t => t.symbol === 'octUSD');
@@ -514,8 +561,10 @@ document.getElementById('btn-swap-confirm')!.addEventListener('click', async () 
 });
 
 async function scanForStealthPayments() {
+  const epoch = accountEpoch;
   try {
     const res = await sendMsg('STEALTH_SCAN', {}) as { outputs?: Array<Record<string, unknown>>; error?: string };
+    if (epoch !== accountEpoch) return; // stale
     if (res.outputs && res.outputs.length > 0) {
       showStealthClaimToast(res.outputs);
     }
@@ -550,16 +599,19 @@ const PollingService = {
 
 // Main screen
 async function loadMainScreen() {
+  const epoch = accountEpoch;
   showScreen(screenMain);
   checkActiveJob();
 
   // Update prover mode label in header
   const status = await sendMsg('GET_PROVER_STATUS') as { local?: boolean; remote?: boolean; mode?: string };
+  if (epoch !== accountEpoch) return;
   const mode = status.mode ?? 'browser';
   updateProverModeLabel(mode);
 
   // Populate account selector from background (fresh derivation)
   const accRes = await sendMsg('GET_ACCOUNTS') as { accounts?: Array<{ name: string; hdIndex: number; address: string }>; activeHdIndex?: number; error?: string };
+  if (epoch !== accountEpoch) return;
   const select = document.getElementById('account-select') as HTMLSelectElement;
   if (accRes.accounts) {
     select.innerHTML = accRes.accounts.map((acc, i) => {
@@ -569,6 +621,7 @@ async function loadMainScreen() {
   }
 
   const addrRes = await sendMsg('GET_ADDRESS') as { address?: string; error?: string };
+  if (epoch !== accountEpoch) return;
   if (addrRes.error) { showToast('Incorrect password'); showScreen(screenUnlock); return; }
   const fullAddr = addrRes.address!;
   const addrEl = document.getElementById('display-address')!;
@@ -584,8 +637,31 @@ async function loadMainScreen() {
   await refreshTokens();
   await loadActivity();
 
+  // Check stealth readiness (public key registered on-chain)
+  updateStealthBadge();
+
   // Start polling services (includes private balance)
   PollingService.start();
+}
+
+async function updateStealthBadge() {
+  const epoch = accountEpoch;
+  const badge = document.getElementById('stealth-badge')!;
+  const res = await sendMsg('CHECK_STEALTH_READY') as { ready?: boolean; reason?: string };
+  if (epoch !== accountEpoch) return; // stale
+  if (res.ready) {
+    badge.innerHTML = '<svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>';
+    badge.classList.remove('hidden', 'not-ready');
+    badge.onmouseenter = () => { acctTooltip.textContent = 'Stealth ready'; };
+  } else if (res.reason === 'no_funds') {
+    // No badge for unfunded accounts — nothing actionable
+    badge.classList.add('hidden');
+  } else {
+    badge.innerHTML = '<svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10" stroke-dasharray="50" stroke-dashoffset="15" stroke-linecap="round"/></svg>';
+    badge.classList.remove('hidden');
+    badge.classList.add('not-ready');
+    badge.onmouseenter = () => { acctTooltip.textContent = 'Registering…'; };
+  }
 }
 
 // In-memory activity cache, keyed by tx_hash for deduplication
@@ -596,6 +672,7 @@ let activityLoading = false;
 async function loadActivity() {
   if (activityLoading) return;
   activityLoading = true;
+  const epoch = accountEpoch;
   try {
   const actList = document.getElementById('activity-list')!;
   const pendingEl = document.getElementById('activity-pending')!;
@@ -610,7 +687,10 @@ async function loadActivity() {
   const activeTypeClass = activeUnshieldJob ? 'unshield' : activeStealthJob ? 'stealth' : activeClaimJob ? 'claim' : 'shield';
 
   if (activeJobId) {
-    const job = await sendMsg('GET_JOB_STATUS', { jobId: activeJobId }) as { status: string; step?: string };
+    const isPlaceholder = activeJobId.startsWith('claim_pending_');
+    const job = isPlaceholder
+      ? { status: 'running', step: 'Starting claim...' }
+      : await sendMsg('GET_JOB_STATUS', { jobId: activeJobId }) as { status: string; step?: string };
     if (job.status === 'running' || job.status === 'pending_unlock' || job.status === 'crypto_done') {
       const elapsed = activeStart ? Math.floor((Date.now() - activeStart) / 1000) : 0;
       const timeStr = elapsed < 60 ? `${elapsed}s ago` : `${Math.floor(elapsed / 60)}m ${elapsed % 60}s ago`;
@@ -637,12 +717,22 @@ async function loadActivity() {
 
   const myAddr = document.getElementById('display-address')!.getAttribute('data-full') ?? '';
   const res = await sendMsg('GET_ACTIVITY') as { transactions?: Array<Record<string, unknown>>; error?: string };
+  if (epoch !== accountEpoch) return; // stale
 
   // Merge new results into cache (add-only); on error, keep existing cache
   if (!res.error && res.transactions && res.transactions.length > 0) {
     for (const tx of res.transactions) {
       const hash = String(tx.tx_hash ?? '');
-      if (hash) activityCache.set(hash, tx);
+      if (!hash) continue;
+      const existing = activityCache.get(hash);
+      // Preserve locally-known amount for claim/stealth (on-chain amount is always 0)
+      if (existing && existing.amount_raw && Number(tx.amount_raw ?? tx.amount ?? 0) === 0) {
+        const opType = String(tx.op_type ?? '');
+        if (opType === 'claim' || opType === 'stealth') {
+          tx.amount_raw = existing.amount_raw;
+        }
+      }
+      activityCache.set(hash, tx);
     }
   }
 
@@ -668,6 +758,7 @@ async function loadActivity() {
     const hash = String(tx.tx_hash ?? '');
     const ts = Number(tx.timestamp ?? 0);
     const time = ts ? new Date(ts * 1000).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+    const isPending = Boolean(tx._pending);
 
     let typeLabel: string;
     let typeClass: string;
@@ -680,6 +771,14 @@ async function loadActivity() {
       typeLabel = 'Unshield';
       typeClass = 'unshield';
       counterparty = to;
+    } else if (opType === 'stealth') {
+      typeLabel = 'Stealth Send';
+      typeClass = 'stealth';
+      counterparty = to;
+    } else if (opType === 'claim') {
+      typeLabel = 'Stealth Claim';
+      typeClass = 'claim';
+      counterparty = from;
     } else if (opType === 'call') {
       typeLabel = 'Contract Call';
       typeClass = 'call';
@@ -694,9 +793,11 @@ async function loadActivity() {
       counterparty = from;
     }
 
-    return `<div class="activity-item" data-hash="${escapeHtml(hash)}" title="View on OctraScan">
-      <div class="activity-row"><span class="activity-type ${typeClass}">${typeLabel}</span><span class="activity-amount">${amount ? amount + ' OCT' : ''}</span></div>
-      <div class="activity-row"><span class="activity-addr">${escapeHtml(counterparty)}</span><span class="activity-time">${time}</span></div>
+    const amountDisplay = amountRaw > 0 ? amount + ' OCT' : '';
+    const pendingBadge = isPending ? ' <span class="activity-pending-badge">Confirming</span>' : '';
+    return `<div class="activity-item${isPending ? ' confirming' : ''}" data-hash="${escapeHtml(hash)}" title="View on OctraScan">
+      <div class="activity-row"><span class="activity-type ${typeClass}">${typeLabel}${pendingBadge}</span><span class="activity-amount">${amountDisplay}</span></div>
+      <div class="activity-row"><span class="activity-addr">${isPending ? 'Waiting for confirmation...' : escapeHtml(counterparty)}</span><span class="activity-time">${time}</span></div>
     </div>`;
   }).join('');
 
@@ -724,11 +825,19 @@ document.getElementById('account-select')!.addEventListener('change', async (e) 
   state.activeIndex = idx;
   await saveWallet(state);
   const account = state.accounts[idx];
+  accountEpoch++; // invalidate in-flight requests from previous account
+  PollingService.stop();
   await sendMsg('SWITCH_ACCOUNT', { hdIndex: account.hdIndex });
 
-  // Reset displayed balance and activity immediately
+  // Reset displayed balance, activity, stealth badge, and input fields immediately
+  document.getElementById('stealth-badge')!.classList.add('hidden');
   document.getElementById('display-balance')!.textContent = '0.00 OCT';
   document.getElementById('display-public-balance')!.textContent = '0.00';
+  (document.getElementById('send-amount') as HTMLInputElement).value = '';
+  (document.getElementById('send-to') as HTMLInputElement).value = '';
+  (document.getElementById('shield-amount') as HTMLInputElement).value = '';
+  submitSendBtn.disabled = true;
+  submitShieldBtn.disabled = true;
   const privEl = document.getElementById('display-private-balance')!;
   privEl.textContent = '···';
   privEl.classList.add('shimmer');
@@ -758,6 +867,8 @@ document.getElementById('btn-add-account')!.addEventListener('click', async () =
   state.accounts.push({ name, hdIndex: nextHdIndex, address: res.address! });
   state.activeIndex = state.accounts.length - 1;
   await saveWallet(state);
+  accountEpoch++; // invalidate in-flight requests from previous account
+  PollingService.stop();
   await sendMsg('SWITCH_ACCOUNT', { hdIndex: nextHdIndex });
   await sendMsg('DERIVE_PVAC_KEYS');
   pvacOverlay.classList.add('hidden');
@@ -809,6 +920,7 @@ function showSuggestions(filter: string) {
       e.preventDefault();
       sendToInput.value = (el as HTMLElement).dataset.addr!;
       suggestionsEl.classList.add('hidden');
+      updateSendState();
     });
   });
 }
@@ -867,11 +979,17 @@ submitSendBtn.addEventListener('click', async () => {
   if (!to || !amount) { showToast('Fill in all fields'); return; }
 
   if (sendMode === 'stealth') {
-    showActionToast('Private transfer started', { action: 'View', goActivity: true });
     const res = await sendMsg('STEALTH_SEND', { to, amount }) as { jobId?: string; error?: string };
     if (res.error) {
-      showActionToast(`Error: ${res.error}`, { duration: 4000 });
+      const msg = res.error === 'recipient_no_pvac'
+        ? 'Recipient must have funds to receive stealth sends'
+        : `Error: ${res.error}`;
+      showActionToast(msg, { duration: 4000 });
     } else if (res.jobId) {
+      showActionToast('Private transfer started', { action: 'View', goActivity: true });
+      (document.getElementById('send-amount') as HTMLInputElement).value = '';
+      (document.getElementById('send-to') as HTMLInputElement).value = '';
+      submitSendBtn.disabled = true;
       await chrome.storage.local.set({ activeStealthJob: res.jobId, activeStealthStart: Date.now() });
       pollJobStatus(res.jobId, 'stealth');
     }
@@ -881,6 +999,25 @@ submitSendBtn.addEventListener('click', async () => {
     if (res.error) {
       showActionToast(`Error: ${res.error}`, { duration: 4000 });
     } else {
+      (document.getElementById('send-amount') as HTMLInputElement).value = '';
+      (document.getElementById('send-to') as HTMLInputElement).value = '';
+      submitSendBtn.disabled = true;
+      // Inject synthetic activity entry immediately (indexer may lag)
+      if (res.hash) {
+        const myAddr = document.getElementById('display-address')!.getAttribute('data-full') ?? '';
+        let rawAmount = 0;
+        if (amount.includes('.')) {
+          const [intPart, fracPart] = amount.split('.');
+          rawAmount = Number(BigInt(intPart) * 1000000n + BigInt((fracPart + '000000').slice(0, 6)));
+        } else {
+          rawAmount = Number(BigInt(amount) * 1000000n);
+        }
+        activityCache.set(res.hash, {
+          tx_hash: res.hash, timestamp: Math.floor(Date.now() / 1000),
+          from: myAddr, to, op_type: 'standard', amount_raw: rawAmount,
+          _pending: true,
+        });
+      }
       showActionToast('Transaction confirmed!', { action: 'View', goActivity: true });
       loadActivity();
     }
@@ -897,7 +1034,9 @@ submitShieldBtn.addEventListener('click', async () => {
     if (res.error) {
       showActionToast(`Error: ${res.error}`, { duration: 4000 });
     } else if (res.jobId) {
-      await chrome.storage.local.set({ activeShieldJob: res.jobId, activeShieldStart: Date.now() });
+      (document.getElementById('shield-amount') as HTMLInputElement).value = '';
+      submitShieldBtn.disabled = true;
+      await chrome.storage.local.set({ activeShieldJob: res.jobId, activeShieldStart: Date.now(), activeShieldAmount: amount });
       pollJobStatus(res.jobId, 'shield');
     }
   } else {
@@ -906,7 +1045,9 @@ submitShieldBtn.addEventListener('click', async () => {
     if (res.error) {
       showActionToast(`Error: ${res.error}`, { duration: 4000 });
     } else if (res.jobId) {
-      await chrome.storage.local.set({ activeUnshieldJob: res.jobId, activeUnshieldStart: Date.now() });
+      (document.getElementById('shield-amount') as HTMLInputElement).value = '';
+      submitShieldBtn.disabled = true;
+      await chrome.storage.local.set({ activeUnshieldJob: res.jobId, activeUnshieldStart: Date.now(), activeUnshieldAmount: amount });
       pollJobStatus(res.jobId, 'unshield');
     }
   }
@@ -924,12 +1065,16 @@ let pollTimer: ReturnType<typeof setInterval> | null = null;
 function pollJobStatus(jobId: string, jobType: 'shield' | 'unshield' | 'stealth' | 'claim' = 'unshield') {
   const label = jobType === 'shield' ? 'Shield' : jobType === 'stealth' ? 'Private transfer' : jobType === 'claim' ? 'Claim' : 'Unshield';
   const storageKeys = jobType === 'shield'
-    ? ['activeShieldJob', 'activeShieldStart']
+    ? ['activeShieldJob', 'activeShieldStart', 'activeShieldAmount']
     : jobType === 'stealth'
-    ? ['activeStealthJob', 'activeStealthStart']
+    ? ['activeStealthJob', 'activeStealthStart', 'activeStealthAmount']
     : jobType === 'claim'
-    ? ['activeClaimJob', 'activeClaimStart']
-    : ['activeUnshieldJob', 'activeUnshieldStart'];
+    ? ['activeClaimJob', 'activeClaimStart', 'activeClaimAmount']
+    : ['activeUnshieldJob', 'activeUnshieldStart', 'activeUnshieldAmount'];
+  const amountKey = jobType === 'shield' ? 'activeShieldAmount'
+    : jobType === 'stealth' ? 'activeStealthAmount'
+    : jobType === 'claim' ? 'activeClaimAmount'
+    : 'activeUnshieldAmount';
 
   if (pollTimer) clearInterval(pollTimer);
   pollTimer = setInterval(async () => {
@@ -939,7 +1084,32 @@ function pollJobStatus(jobId: string, jobType: 'shield' | 'unshield' | 'stealth'
     } else if (res.status === 'done') {
       clearInterval(pollTimer!);
       pollTimer = null;
+      // Read stored amount before clearing keys
+      const stored = await chrome.storage.local.get(amountKey);
+      const jobAmount = stored[amountKey] ?? '';
       await chrome.storage.local.remove(storageKeys);
+      // Inject synthetic activity entry so it shows immediately (indexer may lag)
+      if (res.hash) {
+        const myAddr = document.getElementById('display-address')!.getAttribute('data-full') ?? '';
+        const opType = jobType === 'shield' ? 'encrypt' : jobType === 'unshield' ? 'decrypt' : jobType === 'stealth' ? 'stealth' : jobType === 'claim' ? 'claim' : 'standard';
+        // Parse amount to raw (claim/stealth amounts are already raw from background)
+        let rawAmount = 0;
+        if (jobAmount) {
+          if (jobType === 'claim' || jobType === 'stealth') {
+            rawAmount = Number(jobAmount);
+          } else if (jobAmount.includes('.')) {
+            const [intPart, fracPart] = jobAmount.split('.');
+            rawAmount = Number(BigInt(intPart) * 1000000n + BigInt((fracPart + '000000').slice(0, 6)));
+          } else {
+            rawAmount = Number(BigInt(jobAmount) * 1000000n);
+          }
+        }
+        activityCache.set(res.hash, {
+          tx_hash: res.hash, timestamp: Math.floor(Date.now() / 1000),
+          from: myAddr, to: myAddr, op_type: opType, amount_raw: rawAmount,
+          _pending: true,
+        });
+      }
       const doneMsg = jobType === 'shield' ? 'Funds shielded!' : jobType === 'claim' ? 'Stealth funds claimed!' : jobType === 'stealth' ? 'Private transfer complete!' : 'Funds unshielded!';
       showActionToast(doneMsg, { action: 'View', goActivity: true });
       loadActivity();
@@ -982,25 +1152,27 @@ document.getElementById('btn-prover-settings')!.addEventListener('click', () => 
 document.getElementById('prover-close')!.addEventListener('click', () => proverModal.classList.add('hidden'));
 proverModal.addEventListener('click', (e) => { if (e.target === proverModal) proverModal.classList.add('hidden'); });
 
-// Network toggle (mainnet ↔ mocknet)
+// Network toggle (mainnet ↔ devnet)
 const networkLabel = document.getElementById('network-label')!;
-const MOCK_RPC = 'http://localhost:18332/rpc';
+const DEVNET_RPC = 'https://devnet.octrascan.io/rpc';
 const MAIN_RPC = 'https://octra.network/rpc';
 
 (async () => {
   const res = await sendMsg('GET_RPC_URL') as { rpcUrl?: string };
-  networkLabel.textContent = res.rpcUrl === MOCK_RPC ? 'mocknet' : 'mainnet';
-  networkLabel.style.color = res.rpcUrl === MOCK_RPC ? '#f59e0b' : '';
+  networkLabel.textContent = res.rpcUrl === DEVNET_RPC ? 'devnet' : 'mainnet';
+  networkLabel.style.color = res.rpcUrl === DEVNET_RPC ? '#f59e0b' : '';
+  setExplorerFromRpc(res.rpcUrl ?? MAIN_RPC);
 })();
 
 document.getElementById('btn-network')!.addEventListener('click', async () => {
   const res = await sendMsg('GET_RPC_URL') as { rpcUrl?: string };
-  const isMock = res.rpcUrl === MOCK_RPC;
-  const newUrl = isMock ? MAIN_RPC : MOCK_RPC;
+  const isDevnet = res.rpcUrl === DEVNET_RPC;
+  const newUrl = isDevnet ? MAIN_RPC : DEVNET_RPC;
   await sendMsg('SET_RPC_URL', { url: newUrl });
-  networkLabel.textContent = isMock ? 'mainnet' : 'mocknet';
-  networkLabel.style.color = isMock ? '' : '#f59e0b';
-  showToast(isMock ? 'Switched to Mainnet' : 'Switched to Mocknet');
+  setExplorerFromRpc(newUrl);
+  networkLabel.textContent = isDevnet ? 'mainnet' : 'devnet';
+  networkLabel.style.color = isDevnet ? '' : '#f59e0b';
+  showToast(isDevnet ? 'Switched to Mainnet' : 'Switched to Devnet');
 });
 
 async function refreshProverStatus() {
@@ -1029,8 +1201,8 @@ async function refreshProverStatus() {
 }
 
 function updateProverModeLabel(mode: string) {
-  const labels: Record<string, string> = { local: 'Desktop', remote: 'Remote', browser: 'In-Browser' };
-  proverModeLabel.textContent = labels[mode] ?? 'In-Browser';
+  const labels: Record<string, string> = { local: 'Prover: Desktop', remote: 'Prover: Remote', browser: 'Prover: Wallet (slow)' };
+  proverModeLabel.textContent = labels[mode] ?? 'Prover: Wallet (slow)';
   proverModeBtn.className = 'prover-mode-btn' + (mode === 'local' ? ' active-local' : mode === 'remote' ? ' active-remote' : '');
 }
 

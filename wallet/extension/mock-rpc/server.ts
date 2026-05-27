@@ -14,6 +14,12 @@
 
 import { createServer, IncomingMessage, ServerResponse } from 'http';
 import { randomBytes } from 'crypto';
+import { readFileSync, existsSync } from 'fs';
+import { join, extname, dirname } from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 const PORT = 18332;
 const MICRO = 1_000_000; // 1 OCT = 1,000,000 micro-units
@@ -226,17 +232,59 @@ const handlers: Record<string, Handler> = {
   },
 };
 
+// --- Static File Serving ---
+
+const STATIC_DIR = join(__dirname, '..', 'static');
+const MIME_TYPES: Record<string, string> = {
+  '.html': 'text/html',
+  '.css': 'text/css',
+  '.js': 'application/javascript',
+  '.json': 'application/json',
+  '.png': 'image/png',
+  '.svg': 'image/svg+xml',
+  '.ico': 'image/x-icon',
+};
+
+function serveStatic(req: IncomingMessage, res: ServerResponse): boolean {
+  let urlPath = req.url?.split('?')[0] ?? '/';
+  if (urlPath === '/') urlPath = '/pvac-demo.html';
+
+  // Prevent path traversal
+  const safePath = join(STATIC_DIR, urlPath.replace(/\.\./g, ''));
+  if (!safePath.startsWith(STATIC_DIR)) {
+    res.writeHead(403); res.end('Forbidden'); return true;
+  }
+
+  if (!existsSync(safePath)) return false;
+
+  const ext = extname(safePath);
+  const contentType = MIME_TYPES[ext] || 'application/octet-stream';
+  const content = readFileSync(safePath);
+  res.writeHead(200, { 'Content-Type': contentType });
+  res.end(content);
+  return true;
+}
+
 // --- HTTP Server ---
 
 function handleRequest(req: IncomingMessage, res: ServerResponse) {
   // CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
   if (req.method === 'OPTIONS') {
     res.writeHead(204);
     res.end();
+    return;
+  }
+
+  // Serve static files for GET requests
+  if (req.method === 'GET') {
+    if (!serveStatic(req, res)) {
+      res.writeHead(404);
+      res.end('Not found');
+    }
     return;
   }
 
@@ -271,6 +319,7 @@ function handleRequest(req: IncomingMessage, res: ServerResponse) {
 const server = createServer(handleRequest);
 server.listen(PORT, () => {
   console.log(`\n  🧪 Octra Mock RPC running at http://localhost:${PORT}/rpc`);
+  console.log(`  🌐 PVAC Demo at http://localhost:${PORT}/`);
   console.log(`  📦 Every address gets ${formatBalance(DEFAULT_PUBLIC_BALANCE)} OCT on first access`);
   console.log(`  💰 Faucet: curl -X POST http://localhost:${PORT}/rpc -d '{"jsonrpc":"2.0","id":1,"method":"faucet_fund","params":["<address>"]}'`);
   console.log('');

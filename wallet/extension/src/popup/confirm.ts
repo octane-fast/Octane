@@ -2,7 +2,7 @@
 
 interface PendingApproval {
   id: string;
-  type: 'connect' | 'sign_message' | 'send_transaction' | 'call_contract';
+  type: 'connect' | 'sign_message' | 'send_transaction' | 'call_contract' | 'pvac_decrypt' | 'pvac_prove';
   origin: string;
   data: Record<string, unknown>;
 }
@@ -73,6 +73,23 @@ async function load() {
         ${approval.data.amount && approval.data.amount !== '0' ? `<div class="row"><span class="label">OCT attached:</span> <span class="value">${approval.data.amount}</span></div>` : ''}
       `;
       warningEl.textContent = 'This will execute a smart contract function.';
+      break;
+
+    case 'pvac_decrypt':
+      titleEl.textContent = 'Decrypt Private Value';
+      detailsEl.innerHTML = `
+        <div class="row"><span class="label">Action:</span> <span class="value">${escapeHtml(String(approval.data.operation ?? 'Decrypt a ciphertext'))}</span></div>
+      `;
+      warningEl.textContent = 'This will reveal a private encrypted value to the requesting site.';
+      break;
+
+    case 'pvac_prove':
+      titleEl.textContent = 'PVAC Proof Request';
+      detailsEl.innerHTML = `
+        <div class="row"><span class="label">Operation:</span> <span class="value">${escapeHtml(String(approval.data.operation ?? 'Generate proof'))}</span></div>
+        ${approval.data.detail ? `<div class="row"><span class="label">Details:</span> <span class="value">${escapeHtml(String(approval.data.detail))}</span></div>` : ''}
+      `;
+      warningEl.textContent = 'This will use your private key to generate a cryptographic proof.';
       break;
   }
 

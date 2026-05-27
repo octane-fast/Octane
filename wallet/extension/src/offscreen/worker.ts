@@ -222,6 +222,67 @@ self.onmessage = async (ev: MessageEvent) => {
         self.postMessage({ type: 'result', data: { value: String(val) } });
         break;
       }
+      case 'pvac_encrypt': {
+        if (!initialized || msg.keyId !== initializedKeyId) {
+          initPvacFromKeys(fromBase64(msg.pvacSkB64), fromBase64(msg.pvacPkB64));
+          initializedKeyId = msg.keyId;
+        }
+        const seed = new Uint8Array(32);
+        crypto.getRandomValues(seed);
+        const ct = encryptValue(BigInt(msg.value), seed);
+        self.postMessage({ type: 'result', data: { ciphertext: toBase64(ct) } });
+        break;
+      }
+      case 'pvac_decrypt': {
+        if (!initialized || msg.keyId !== initializedKeyId) {
+          initPvacFromKeys(fromBase64(msg.pvacSkB64), fromBase64(msg.pvacPkB64));
+          initializedKeyId = msg.keyId;
+        }
+        const ct2 = fromBase64(msg.ciphertext);
+        const decVal = decryptValue(ct2);
+        self.postMessage({ type: 'result', data: { value: Number(decVal) } });
+        break;
+      }
+      case 'pvac_rangeProof': {
+        if (!initialized || msg.keyId !== initializedKeyId) {
+          initPvacFromKeys(fromBase64(msg.pvacSkB64), fromBase64(msg.pvacPkB64));
+          initializedKeyId = msg.keyId;
+        }
+        const rpCt = fromBase64(msg.ciphertext);
+        const rpBytes2 = makeRangeProof(rpCt, BigInt(msg.value));
+        self.postMessage({ type: 'result', data: { proof: toBase64(rpBytes2) } });
+        break;
+      }
+      case 'pvac_commit': {
+        if (!initialized || msg.keyId !== initializedKeyId) {
+          initPvacFromKeys(fromBase64(msg.pvacSkB64), fromBase64(msg.pvacPkB64));
+          initializedKeyId = msg.keyId;
+        }
+        const blindBytes = msg.blinding ? fromBase64(msg.blinding) : (() => { const b = new Uint8Array(32); crypto.getRandomValues(b); return b; })();
+        const commitment = pedersenCommit(BigInt(msg.value), blindBytes);
+        self.postMessage({ type: 'result', data: { commitment: toBase64(commitment), blinding: toBase64(blindBytes) } });
+        break;
+      }
+      case 'pvac_zeroProof': {
+        if (!initialized || msg.keyId !== initializedKeyId) {
+          initPvacFromKeys(fromBase64(msg.pvacSkB64), fromBase64(msg.pvacPkB64));
+          initializedKeyId = msg.keyId;
+        }
+        const zpCt = fromBase64(msg.ciphertext);
+        const zpBlinding = fromBase64(msg.blinding);
+        const zpBytes2 = makeZeroProofBound(zpCt, BigInt(msg.value), zpBlinding);
+        self.postMessage({ type: 'result', data: { proof: toBase64(zpBytes2) } });
+        break;
+      }
+      case 'pvac_ctSub': {
+        if (!initialized || msg.keyId !== initializedKeyId) {
+          initPvacFromKeys(fromBase64(msg.pvacSkB64), fromBase64(msg.pvacPkB64));
+          initializedKeyId = msg.keyId;
+        }
+        const subResult = ctSub(fromBase64(msg.a), fromBase64(msg.b));
+        self.postMessage({ type: 'result', data: { ciphertext: toBase64(subResult) } });
+        break;
+      }
       default:
         self.postMessage({ type: 'result', data: { error: `Unknown action: ${msg.action}` } });
     }

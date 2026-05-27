@@ -104,7 +104,7 @@
           <li>⚡ Proofs in seconds (not minutes)</li>
           <li>⚡ Runs locally — your keys stay private</li>
         </ul>
-        <button class="primary prover-rec-btn" onclick="window.open('https://octane-fast.github.io/octane-accelerator/','_blank')">Download Octane Accelerator ↗</button>
+        <button id="btn-download-accelerator" class="primary prover-rec-btn">Download Octane Accelerator ↗</button>
         <button id="btn-skip-prover-rec" class="link">Skip for now</button>
       </div>
     </div>
@@ -125,8 +125,10 @@
       </div>
       <div class="account-selector">
         <select id="account-select"></select>
-        <button id="btn-copy-address" class="icon-btn" title="Copy Address"><svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg></button>
-        <button id="btn-add-account" class="icon-btn" title="Add Account">+</button>
+        <span id="stealth-badge" class="stealth-badge hidden"><svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></span>
+        <button id="btn-copy-address" class="icon-btn"><svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg></button>
+        <button id="btn-add-account" class="icon-btn">+</button>
+        <span id="account-tooltip"></span>
       </div>
       <span id="display-address" class="hidden"></span>
       <div class="balance-section">
@@ -137,7 +139,7 @@
             <span class="balance-sub"><span class="balance-sub-label">Public</span> <span id="display-public-balance">0.00</span></span>
             <span class="balance-sub"><span class="balance-sub-label">Private</span> <span id="display-private-balance" class="shimmer">···</span></span>
           </div>
-          <button id="btn-get-octra" class="get-octra-btn" onclick="window.open('https://octane.fast/get-oct','_blank')">Get OCT</button>
+          <button id="btn-get-octra" class="get-octra-btn">Get OCT</button>
         </div>
       </div>
       <div class="tabs">
@@ -250,7 +252,7 @@
           </div>
           <div id="prover-cta" class="prover-cta hidden">
             <p class="prover-cta-text">Get the Octane Accelerator for instant proofs and private balance decryption.</p>
-            <button class="primary prover-cta-btn" onclick="window.open('https://octane-fast.github.io/octane-accelerator/','_blank')">Download Octane Accelerator ↗</button>
+            <button id="btn-download-accelerator-cta" class="primary prover-cta-btn">Download Octane Accelerator ↗</button>
           </div>
         </div>
       </div>

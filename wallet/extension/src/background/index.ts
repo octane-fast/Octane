@@ -135,6 +135,7 @@ async function ensurePublicKeyRegistered(): Promise<void> {
   const sig = vault.sign(new TextEncoder().encode(msg));
 
   await rpc.registerPublicKey(address, toBase64(vault.getPublicKey()), toBase64(sig));
+  console.log('[wallet] public key registered for', address);
 }
 
 // --- Unlock prompt for dApp requests ---
@@ -148,7 +149,7 @@ async function ensureUnlocked(): Promise<boolean> {
   if (vault.isUnlocked()) return true;
   // Open popup so user can enter password
   const popupUrl = chrome.runtime.getURL('dist/src/popup/index.html?unlock=dapp');
-  chrome.windows.create({
+  const win = await chrome.windows.create({
     url: popupUrl,
     type: 'popup',
     width: 380,
@@ -157,11 +158,17 @@ async function ensureUnlocked(): Promise<boolean> {
   });
   // Wait up to 2 minutes for unlock
   return new Promise<boolean>((resolve) => {
-    unlockWaiters.push(resolve);
+    const wrappedResolve = (unlocked: boolean) => {
+      // Close the popup after unlock
+      if (win?.id) chrome.windows.remove(win.id).catch(() => {});
+      resolve(unlocked);
+    };
+    unlockWaiters.push(wrappedResolve);
     setTimeout(() => {
-      const idx = unlockWaiters.indexOf(resolve);
+      const idx = unlockWaiters.indexOf(wrappedResolve);
       if (idx >= 0) {
         unlockWaiters.splice(idx, 1);
+        if (win?.id) chrome.windows.remove(win.id).catch(() => {});
         resolve(false);
       }
     }, 120_000);
@@ -175,7 +182,7 @@ interface PendingApprovalEntry {
 const pendingApprovals = new Map<string, PendingApprovalEntry>();
 
 async function requestUserApproval(
-  type: 'connect' | 'sign_message' | 'send_transaction' | 'call_contract',
+  type: 'connect' | 'sign_message' | 'send_transaction' | 'call_contract' | 'pvac_decrypt' | 'pvac_prove',
   origin: string,
   data: Record<string, unknown>,
 ): Promise<boolean> {
@@ -240,10 +247,16 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
           // Notify any dApp requests waiting for unlock
           notifyUnlockWaiters();
           // Auto-register public key on-chain (fire-and-forget)
-          ensurePublicKeyRegistered().catch(() => {});
+          ensurePublicKeyRegistered().catch(e => console.warn('[wallet] pubkey registration failed:', e.message));
           // Load PVAC keys from persistent storage and init offscreen
           vault.derivePvacKeys().then(async (keys) => {
             if (!keys) {
+              // Skip expensive WASM derivation if account has no funds (can't register anyway)
+              const bal = await rpc.getBalance(vault.getAddress()).catch(() => null);
+              if (!bal || bal.raw === '0') {
+                console.log('[pvac] skipping WASM derivation — account has no funds');
+                return;
+              }
               // Migration: wallet imported before persistent PVAC storage — derive once
               console.log('[pvac] keys not in local storage, running one-time WASM derivation');
               keys = await vault.generateAndPersistPvacKeys();
@@ -253,6 +266,8 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
                 offscreenPort.postMessage({ action: 'init', pvacSkB64: keys!.skB64, pvacPkB64: keys!.pkB64, keyId: vault.getAddress() });
               }
             }).catch(() => {});
+            // Register PVAC pubkey on-chain if not already
+            ensurePvacRegistered().catch(e => console.warn('[pvac] registration failed:', e.message));
           }).catch((e) => { console.warn('[pvac] key load/derive failed:', e); });
           // Resume any pending_unlock jobs now that wallet is unlocked
           chrome.storage.local.get(null).then((all) => {
@@ -328,15 +343,24 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
           cachedPrivateBalance = null;
           cachedCipherStr = null;
           sendResponse({ address: vault.getAddress() });
-          ensurePublicKeyRegistered().catch(() => {});
+          ensurePublicKeyRegistered().catch(e => console.warn('[wallet] pubkey registration failed:', e.message));
           // Load PVAC keys for this account and init offscreen
-          vault.derivePvacKeys().then((keys) => {
-            if (!keys) return;
+          vault.derivePvacKeys().then(async (keys) => {
+            if (!keys) {
+              // Skip expensive WASM derivation if account has no funds
+              const bal = await rpc.getBalance(vault.getAddress()).catch(() => null);
+              if (!bal || bal.raw === '0') {
+                console.log('[pvac] skipping WASM derivation — account has no funds');
+                return;
+              }
+              keys = await vault.generateAndPersistPvacKeys();
+            }
             ensureOffscreen().then(() => {
               if (offscreenPort) {
-                offscreenPort.postMessage({ action: 'init', pvacSkB64: keys.skB64, pvacPkB64: keys.pkB64, keyId: vault.getAddress() });
+                offscreenPort.postMessage({ action: 'init', pvacSkB64: keys!.skB64, pvacPkB64: keys!.pkB64, keyId: vault.getAddress() });
               }
             }).catch(() => {});
+            ensurePvacRegistered().catch(e => console.warn('[pvac] registration failed:', e.message));
           }).catch(() => {});
           break;
         }
@@ -366,6 +390,25 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
         case 'GET_ADDRESS': {
           if (!vault.isUnlocked()) { sendResponse({ error: 'locked' }); break; }
           sendResponse({ address: vault.getAddress() });
+          break;
+        }
+        case 'CHECK_STEALTH_READY': {
+          if (!vault.isUnlocked()) { sendResponse({ ready: false, reason: 'locked' }); break; }
+          try {
+            const addr = vault.getAddress();
+            const [pk, pvac, bal] = await Promise.all([
+              rpc.getPublicKey(addr),
+              rpc.getPvacPubkey(addr),
+              rpc.getBalance(addr).catch(() => null),
+            ]);
+            if (pk.public_key && pvac) {
+              sendResponse({ ready: true });
+            } else if (!bal || bal.raw === '0') {
+              sendResponse({ ready: false, reason: 'no_funds' });
+            } else {
+              sendResponse({ ready: false, reason: 'registering' });
+            }
+          } catch { sendResponse({ ready: false, reason: 'error' }); }
           break;
         }
         case 'DERIVE_PVAC_KEYS': {
@@ -992,6 +1035,165 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
               break;
             }
             default: {
+              // --- PVAC / FHE proof methods for dApps ---
+              // Helper: run a PVAC operation through desktop prover → relay → WASM fallback
+              async function runPvacOp(
+                operation: string,
+                extra: Record<string, string>,
+                wasmFallback: () => Promise<Record<string, unknown>>,
+              ): Promise<Record<string, unknown>> {
+                const { skB64, pkB64 } = await vault.requirePvacKeys();
+                const payload: Record<string, string> = { operation, pvac_sk_b64: skB64, pvac_pk_b64: pkB64, ...extra };
+
+                // 1) Try native desktop prover
+                const proverUp = await isProverAvailable();
+                if (proverUp) {
+                  try {
+                    const result = await runNativeProver(`dapp_${operation}_${Date.now()}`, payload);
+                    return result;
+                  } catch (e) {
+                    console.warn(`[dapp-pvac] native prover failed for ${operation}:`, (e as Error).message);
+                  }
+                }
+
+                // 2) Try remote prover via relay
+                const remoteConfig = await isRemoteProverConfigured();
+                if (remoteConfig) {
+                  try {
+                    const result = await runRemoteProver(`dapp_${operation}_${Date.now()}`, payload, remoteConfig);
+                    return result;
+                  } catch (e) {
+                    console.warn(`[dapp-pvac] remote prover failed for ${operation}:`, (e as Error).message);
+                  }
+                }
+
+                // 3) WASM fallback
+                return wasmFallback();
+              }
+
+              if (dappMethod === 'octra_pvac_encrypt' || dappMethod === 'pvac_encrypt') {
+                if (!vault.isUnlocked()) { sendResponse({ error: 'Wallet is locked' }); break; }
+                const [encParams] = dappParams as [{ value: number }];
+                if (encParams?.value == null) { sendResponse({ error: 'Missing value' }); break; }
+                const encApproved = await requestUserApproval('pvac_prove', dappOrigin, { operation: 'Encrypt a value', detail: `Value: ${encParams.value}` });
+                if (!encApproved) { sendResponse({ error: 'User rejected request' }); break; }
+                try {
+                  const seed = crypto.getRandomValues(new Uint8Array(32));
+                  const seedB64 = toBase64(seed);
+                  const result = await runPvacOp('encrypt', {
+                    amountRaw: String(encParams.value),
+                    seedB64,
+                  }, async () => {
+                    const { skB64, pkB64 } = await vault.requirePvacKeys();
+                    const { initPvacFromKeys, encryptValue } = await import('../lib/pvac');
+                    await initPvacFromKeys(fromBase64(skB64), fromBase64(pkB64));
+                    const ct = encryptValue(BigInt(encParams.value), seed);
+                    return { ciphertext: toBase64(ct) };
+                  });
+                  sendResponse({ ciphertext: result.ciphertext ?? result.cipher });
+                } catch (e) { sendResponse({ error: (e as Error).message }); }
+                break;
+              }
+              if (dappMethod === 'octra_pvac_decrypt' || dappMethod === 'pvac_decrypt') {
+                if (!vault.isUnlocked()) { sendResponse({ error: 'Wallet is locked' }); break; }
+                const [decParams] = dappParams as [{ ciphertext: string }];
+                if (!decParams?.ciphertext) { sendResponse({ error: 'Missing ciphertext' }); break; }
+                const approved = await requestUserApproval('pvac_decrypt', dappOrigin, { operation: 'Decrypt a private value' });
+                if (!approved) { sendResponse({ error: 'User rejected decrypt request' }); break; }
+                try {
+                  const result = await runPvacOp('decrypt', {
+                    cipher_b64: decParams.ciphertext,
+                  }, async () => {
+                    const { skB64, pkB64 } = await vault.requirePvacKeys();
+                    const { initPvacFromKeys, decryptValue } = await import('../lib/pvac');
+                    await initPvacFromKeys(fromBase64(skB64), fromBase64(pkB64));
+                    const ct = fromBase64(decParams.ciphertext);
+                    const value = decryptValue(ct);
+                    return { value: Number(value) };
+                  });
+                  const val = result.value !== undefined ? Number(result.value) : undefined;
+                  sendResponse({ value: val });
+                } catch (e) { sendResponse({ error: (e as Error).message }); }
+                break;
+              }
+              if (dappMethod === 'octra_pvac_rangeProof' || dappMethod === 'pvac_rangeProof') {
+                if (!vault.isUnlocked()) { sendResponse({ error: 'Wallet is locked' }); break; }
+                const [rpParams] = dappParams as [{ ciphertext: string; value: number }];
+                if (!rpParams?.ciphertext || rpParams?.value == null) { sendResponse({ error: 'Missing ciphertext or value' }); break; }
+                const rpApproved = await requestUserApproval('pvac_prove', dappOrigin, { operation: 'Generate range proof' });
+                if (!rpApproved) { sendResponse({ error: 'User rejected request' }); break; }
+                try {
+                  const result = await runPvacOp('range_proof', {
+                    cipher_b64: rpParams.ciphertext,
+                    amountRaw: String(rpParams.value),
+                  }, async () => {
+                    const { skB64, pkB64 } = await vault.requirePvacKeys();
+                    const { initPvacFromKeys, makeRangeProof } = await import('../lib/pvac');
+                    await initPvacFromKeys(fromBase64(skB64), fromBase64(pkB64));
+                    const ct = fromBase64(rpParams.ciphertext);
+                    const proof = makeRangeProof(ct, BigInt(rpParams.value));
+                    return { proof: toBase64(proof) };
+                  });
+                  sendResponse({ proof: result.proof });
+                } catch (e) { sendResponse({ error: (e as Error).message }); }
+                break;
+              }
+              if (dappMethod === 'octra_pvac_commit' || dappMethod === 'pvac_commit') {
+                if (!vault.isUnlocked()) { sendResponse({ error: 'Wallet is locked' }); break; }
+                const [cmParams] = dappParams as [{ value: number; blinding?: string }];
+                if (cmParams?.value == null) { sendResponse({ error: 'Missing value' }); break; }
+                const cmApproved = await requestUserApproval('pvac_prove', dappOrigin, { operation: 'Create Pedersen commitment', detail: `Value: ${cmParams.value}` });
+                if (!cmApproved) { sendResponse({ error: 'User rejected request' }); break; }
+                try {
+                  const blinding = cmParams.blinding ? fromBase64(cmParams.blinding) : crypto.getRandomValues(new Uint8Array(32));
+                  const blindingB64 = toBase64(blinding);
+                  const result = await runPvacOp('commit', {
+                    amountRaw: String(cmParams.value),
+                    blindingB64,
+                  }, async () => {
+                    const { skB64, pkB64 } = await vault.requirePvacKeys();
+                    const { initPvacFromKeys, pedersenCommit } = await import('../lib/pvac');
+                    await initPvacFromKeys(fromBase64(skB64), fromBase64(pkB64));
+                    const commitment = pedersenCommit(BigInt(cmParams.value), blinding);
+                    return { commitment: toBase64(commitment), blinding: blindingB64 };
+                  });
+                  sendResponse({ commitment: result.commitment, blinding: result.blinding ?? blindingB64 });
+                } catch (e) { sendResponse({ error: (e as Error).message }); }
+                break;
+              }
+              if (dappMethod === 'octra_pvac_zeroProof' || dappMethod === 'pvac_zeroProof') {
+                if (!vault.isUnlocked()) { sendResponse({ error: 'Wallet is locked' }); break; }
+                const [zpParams] = dappParams as [{ ciphertext: string; value: number; blinding: string }];
+                if (!zpParams?.ciphertext || zpParams?.value == null || !zpParams?.blinding) { sendResponse({ error: 'Missing params' }); break; }
+                const zpApproved = await requestUserApproval('pvac_prove', dappOrigin, { operation: 'Generate zero-knowledge proof' });
+                if (!zpApproved) { sendResponse({ error: 'User rejected request' }); break; }
+                try {
+                  const result = await runPvacOp('zero_proof', {
+                    cipher_b64: zpParams.ciphertext,
+                    amountRaw: String(zpParams.value),
+                    blindingB64: zpParams.blinding,
+                  }, async () => {
+                    const { skB64, pkB64 } = await vault.requirePvacKeys();
+                    const { initPvacFromKeys, makeZeroProofBound } = await import('../lib/pvac');
+                    await initPvacFromKeys(fromBase64(skB64), fromBase64(pkB64));
+                    const ct = fromBase64(zpParams.ciphertext);
+                    const blindingBytes = fromBase64(zpParams.blinding);
+                    const proof = makeZeroProofBound(ct, BigInt(zpParams.value), blindingBytes);
+                    return { proof: toBase64(proof) };
+                  });
+                  sendResponse({ proof: result.proof });
+                } catch (e) { sendResponse({ error: (e as Error).message }); }
+                break;
+              }
+              if (dappMethod === 'octra_pvac_getPubkey' || dappMethod === 'pvac_getPubkey') {
+                if (!vault.isUnlocked()) { sendResponse({ error: 'Wallet is locked' }); break; }
+                try {
+                  const { pkB64 } = await vault.requirePvacKeys();
+                  sendResponse({ pubkey: pkB64 });
+                } catch (e) { sendResponse({ error: (e as Error).message }); }
+                break;
+              }
+
               // Fall through to RPC passthrough for node-level methods
               const RPC_PASSLIST = [
                 'octra_balance', 'octra_tokensByAddress', 'octra_account',
@@ -1037,6 +1239,13 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
               amountRaw = BigInt(amount) * 1000000n;
             }
             if (amountRaw <= 0n) { sendResponse({ error: 'invalid amount' }); break; }
+
+            // Check recipient has PVAC pubkey registered (required to receive stealth)
+            const recipientPvac = await rpc.getPvacPubkey(to);
+            if (!recipientPvac) {
+              sendResponse({ error: 'recipient_no_pvac' });
+              break;
+            }
 
             // Create job and respond immediately
             const jobId = crypto.randomUUID();
