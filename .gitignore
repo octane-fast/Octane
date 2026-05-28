@@ -5,6 +5,6 @@ node_modules/
 __pycache__/
 *.oct
 wallet/octane-wallet.zip
-wallet/referencewallet/extension/dist/
-.DS_Store
+wallet/extension/dist/
 wallet/reference/
+.DS_Store
