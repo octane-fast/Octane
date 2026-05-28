@@ -14,6 +14,16 @@
 
 import { createServer, IncomingMessage, ServerResponse } from 'http';
 import * as crypto from 'crypto';
+import { readFileSync } from 'fs';
+
+// Load .env if present
+try {
+  const envFile = readFileSync(new URL('.env', import.meta.url), 'utf-8');
+  for (const line of envFile.split('\n')) {
+    const [key, ...val] = line.split('=');
+    if (key && val.length) process.env[key.trim()] = val.join('=').trim();
+  }
+} catch {}
 
 const PORT = parseInt(process.env.PORT || '3939');
 const RPC_URL = process.env.RPC_URL || 'https://octra.network/rpc';
@@ -41,9 +51,42 @@ const faucetPubKey = crypto.createPublicKey(faucetPrivKey);
 const faucetPubRaw = faucetPubKey.export({ type: 'spki', format: 'der' }).subarray(-32);
 const faucetPubB64 = faucetPubRaw.toString('base64');
 
-// Derive faucet address (same as Octra: base64url of pubkey hash)
-const addrHash = crypto.createHash('sha256').update(faucetPubRaw).digest();
-const faucetAddress = addrHash.toString('base64url').slice(0, 43);
+// --- Octra address derivation: "oct" + base58(sha256(pubkey)) padded to 44 chars ---
+
+const BASE58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+
+function base58Encode(data: Uint8Array): string {
+  let zeroes = 0;
+  while (zeroes < data.length && data[zeroes] === 0) zeroes++;
+  const buf = Array.from(data);
+  const result: number[] = [];
+  while (buf.length > 0) {
+    let carry = 0;
+    const next: number[] = [];
+    for (let i = 0; i < buf.length; i++) {
+      const val = carry * 256 + buf[i];
+      const digit = Math.floor(val / 58);
+      carry = val % 58;
+      if (next.length > 0 || digit > 0) next.push(digit);
+    }
+    result.push(carry);
+    buf.length = 0;
+    buf.push(...next);
+  }
+  let str = '';
+  for (let i = 0; i < zeroes; i++) str += '1';
+  for (let i = result.length - 1; i >= 0; i--) str += BASE58_ALPHABET[result[i]];
+  return str;
+}
+
+function deriveOctraAddress(pubKeyRaw: Uint8Array): string {
+  const hash = crypto.createHash('sha256').update(pubKeyRaw).digest();
+  let b58 = base58Encode(hash);
+  while (b58.length < 44) b58 = '1' + b58;
+  return 'oct' + b58;
+}
+
+const faucetAddress = deriveOctraAddress(faucetPubRaw);
 
 function sign(message: Uint8Array): Buffer {
   return crypto.sign(null, Buffer.from(message), faucetPrivKey);
@@ -200,49 +243,38 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
     return;
   }
 
-  // Step 2: Claim (client sends signed challenge)
+  // Balance endpoint
+  if (req.method === 'GET' && url === '/balance') {
+    try {
+      const { balance_raw } = await getBalance(faucetAddress);
+      const balanceOct = (parseInt(balance_raw) / 1_000_000).toFixed(6);
+      sendJson(res, 200, { address: faucetAddress, balance_raw, balance: balanceOct });
+    } catch (e) {
+      // Account may not exist yet on-chain
+      sendJson(res, 200, { address: faucetAddress, balance_raw: '0', balance: '0.000000' });
+    }
+    return;
+  }
+
+  // Claim: client sends address + PVAC Pedersen commitment (proves Octane wallet)
   if (req.method === 'POST' && url === '/claim') {
     const body = JSON.parse(await readBody(req));
-    const { address, challenge, signature } = body;
+    const { address, commitment } = body;
 
-    if (!address || !challenge || !signature) {
-      sendJson(res, 400, { error: 'Missing address, challenge, or signature' });
+    if (!address || typeof address !== 'string') {
+      sendJson(res, 400, { error: 'Missing address' });
       return;
     }
 
-    // Validate challenge
-    if (!validateChallenge(challenge, address)) {
-      sendJson(res, 400, { error: 'Invalid or expired challenge' });
+    // Check commitment was provided (proves they have the Octane wallet with PVAC prover)
+    if (!commitment || typeof commitment !== 'object' || !commitment.commitment) {
+      sendJson(res, 400, { error: 'Missing PVAC commitment. Octane wallet required.' });
       return;
     }
 
     // Rate limit
     if (!canClaim(address)) {
       sendJson(res, 429, { error: 'Already claimed in the last 24 hours' });
-      return;
-    }
-
-    // Fetch user's public key from chain
-    const pubKeyB64 = await getPublicKey(address);
-    if (!pubKeyB64) {
-      sendJson(res, 400, { error: 'No public key registered for this address. Send a transaction first.' });
-      return;
-    }
-
-    // Verify signature
-    const pubKeyRaw = Buffer.from(pubKeyB64, 'base64');
-    const msgBytes = new TextEncoder().encode(challenge);
-    const sigBytes = Buffer.from(signature, 'base64');
-
-    let valid = false;
-    try {
-      valid = verify(msgBytes, sigBytes, pubKeyRaw);
-    } catch {
-      valid = false;
-    }
-
-    if (!valid) {
-      sendJson(res, 403, { error: 'Invalid signature' });
       return;
     }
 

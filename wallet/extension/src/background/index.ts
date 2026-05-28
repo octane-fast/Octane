@@ -911,6 +911,15 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
               }
               break;
             }
+            case 'octra_getPublicKey':
+            case 'getPublicKey': {
+              if (!vault.isUnlocked()) {
+                const unlocked = await ensureUnlocked();
+                if (!unlocked) { sendResponse({ error: 'Wallet is locked' }); break; }
+              }
+              sendResponse(toBase64(vault.getPublicKey()));
+              break;
+            }
             case 'octra_signMessage':
             case 'signMessage':
             case 'sign_message': {

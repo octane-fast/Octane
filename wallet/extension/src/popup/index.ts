@@ -314,7 +314,7 @@ document.getElementById('btn-skip-prover-rec')!.addEventListener('click', async 
 
 // External links (no inline onclick — CSP)
 document.getElementById('btn-get-octra')!.addEventListener('click', () => {
-  window.open('https://octane.fast/get-oct', '_blank');
+  window.open('https://octane-fast.github.io/Octane/dev/faucet.html', '_blank');
 });
 document.getElementById('btn-download-accelerator')!.addEventListener('click', () => {
   window.open('https://octane-fast.github.io/octane-accelerator/', '_blank');
