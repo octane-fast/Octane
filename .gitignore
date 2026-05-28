@@ -6,3 +6,5 @@ __pycache__/
 *.oct
 wallet/octane-wallet.zip
 wallet/referencewallet/extension/dist/
+.DS_Store
+wallet/reference/
