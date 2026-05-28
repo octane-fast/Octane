@@ -55,6 +55,17 @@
       <div class="step">
         <div class="step-header">
           <div class="step-num" id="step2-num">2</div>
+          <span class="step-title">Follow Octane on X</span>
+        </div>
+        <p class="step-desc">Follow our account to stay updated on network news.</p>
+        <div style="margin-left: 34px;">
+          <button id="btn-follow" disabled>Follow @octane__fast</button>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-header">
+          <div class="step-num" id="step3-num">3</div>
           <span class="step-title">Generate Proof</span>
         </div>
         <p class="step-desc">Generate a Pedersen commitment to prove you're using the Octane wallet.</p>
@@ -122,12 +133,21 @@
         document.getElementById('user-address').style.display = 'block';
         document.getElementById('btn-connect').textContent = 'Connected ✓';
         document.getElementById('btn-connect').disabled = true;
-        document.getElementById('btn-claim').disabled = false;
+        document.getElementById('btn-follow').disabled = false;
         setStep(1, 'done');
         setStep(2, 'active');
       } catch (e) {
         setStatus(e.message, 'error');
       }
+    });
+
+    document.getElementById('btn-follow').addEventListener('click', () => {
+      window.open('https://x.com/octane__fast', '_blank');
+      document.getElementById('btn-follow').textContent = 'Followed ✓';
+      document.getElementById('btn-follow').disabled = true;
+      document.getElementById('btn-claim').disabled = false;
+      setStep(2, 'done');
+      setStep(3, 'active');
     });
 
     document.getElementById('btn-claim').addEventListener('click', async () => {
@@ -154,7 +174,7 @@
         const claimData = await claimRes.json();
         if (!claimRes.ok) throw new Error(claimData.error || 'Claim failed');
 
-        setStep(2, 'done');
+        setStep(3, 'done');
         setStatus(`✓ Sent 3 OCT to your wallet!<br><a href="https://octrascan.io/tx.html?hash=${claimData.txHash}" target="_blank">View transaction →</a>`, 'success');
         btn.textContent = 'Claimed ✓';
         setClaimed();
@@ -178,12 +198,17 @@
           if (hasClaimed()) {
             document.getElementById('btn-claim').disabled = true;
             document.getElementById('btn-claim').textContent = 'Claimed ✓';
+            document.getElementById('btn-follow').disabled = true;
+            document.getElementById('btn-follow').textContent = 'Followed ✓';
             setStatus('You already claimed in the last 24 hours.', 'info');
+            setStep(1, 'done');
+            setStep(2, 'done');
+            setStep(3, 'done');
           } else {
-            document.getElementById('btn-claim').disabled = false;
+            document.getElementById('btn-follow').disabled = false;
+            setStep(1, 'done');
+            setStep(2, 'active');
           }
-          setStep(1, 'done');
-          setStep(2, 'active');
         }
       }).catch(() => {});
     }
