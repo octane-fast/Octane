@@ -1401,7 +1401,7 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
           sendResponse({ error: `unknown message type: ${type}` });
       }
     } catch (err) {
-      sendResponse({ error: (err as Error).message });
+      sendResponse({ error: (err as Error).message || 'operation failed' });
     }
   })();
   return true; // async response

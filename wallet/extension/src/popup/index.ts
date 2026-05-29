@@ -120,7 +120,13 @@ async function init() {
 
   const walletExists = await hasWallet();
   if (walletExists) {
-    showScreen(screenUnlock);
+    // Skip lock screen if vault is already unlocked in the service worker
+    const status = await sendMsg('IS_UNLOCKED') as { unlocked?: boolean };
+    if (status.unlocked) {
+      await maybeShowProverRec();
+    } else {
+      showScreen(screenUnlock);
+    }
   } else {
     showScreen(screenSetup);
   }
@@ -291,9 +297,9 @@ async function doUnlock() {
   const activeAccount = state.accounts[state.activeIndex];
   try {
     const res = await sendMsg('UNLOCK', { encryptedSeed: state.encryptedSeed, password: pw, hdIndex: activeAccount.hdIndex }) as { success?: boolean; error?: string };
-    if (res.error) { showToast('Incorrect password'); return; }
+    if ('error' in res) { showToast('Incorrect password'); return; }
     await maybeShowProverRec();
-  } catch {
+  } catch (e) {
     showToast('Incorrect password');
   }
 }
