@@ -124,6 +124,7 @@
             <input type="checkbox" id="tor-toggle-main">
             <span class="toggle-slider"></span>
           </label>
+          <button id="btn-settings" class="icon-btn" title="Settings"><svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 01-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg></button>
         </div>
       </div>
       <div class="account-selector">
@@ -156,6 +157,14 @@
           <div id="send-to-suggestions" class="suggestions hidden"></div>
         </div>
         <input type="text" id="send-amount" placeholder="Amount (OCT)">
+        <div id="send-amount-stealth-wrap" class="stealth-amount-wrap hidden">
+          <input type="text" id="send-amount-stealth" value="1" readonly>
+          <div class="stealth-amount-arrows">
+            <button class="stealth-arrow up" id="stealth-amount-up">&#9650;</button>
+            <button class="stealth-arrow down" id="stealth-amount-down">&#9660;</button>
+          </div>
+          <span class="stealth-amount-suffix">OCT</span>
+        </div>
         <div class="shield-direction-toggle" id="send-mode-toggle">
           <button class="shield-dir active" id="send-dir-public" data-dir="public">Public</button>
           <span class="shield-dir-divider"></span>
@@ -212,6 +221,41 @@
           </div>
           <button id="btn-swap-confirm" class="primary" disabled>Confirm Swap</button>
           <div id="swap-result" class="result"></div>
+        </div>
+      </div>
+    </div>
+    <!-- Settings Modal -->
+    <div id="settings-modal" class="modal-overlay hidden">
+      <div class="modal">
+        <div class="modal-header">
+          <h3>Settings</h3>
+          <button id="settings-close" class="modal-close">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="settings-section">
+            <h4>Fee Overrides <span class="settings-hint">(units are in microOCT)</span></h4>
+            <label class="settings-field">
+              <span>Default (sends)</span>
+              <input type="text" id="fee-default" placeholder="10">
+            </label>
+            <label class="settings-field">
+              <span>Shield (encrypt)</span>
+              <input type="text" id="fee-encrypt" placeholder="auto">
+            </label>
+            <label class="settings-field">
+              <span>Unshield (decrypt)</span>
+              <input type="text" id="fee-decrypt" placeholder="auto">
+            </label>
+            <label class="settings-field">
+              <span>Stealth send</span>
+              <input type="text" id="fee-stealth" placeholder="auto">
+            </label>
+            <label class="settings-field">
+              <span>Stealth claim</span>
+              <input type="text" id="fee-claim" placeholder="auto">
+            </label>
+            <button id="btn-save-fees" class="primary" style="margin-top:8px">Save</button>
+          </div>
         </div>
       </div>
     </div>

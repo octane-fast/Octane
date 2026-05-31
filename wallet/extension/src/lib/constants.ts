@@ -17,7 +17,7 @@ export const DAPP_REQUEST_TIMEOUT_MS = 180_000; // 3 minutes
 /** SOCKS5 port used by the Tor proxy (Tor Browser default). */
 export const TOR_SOCKS_PORT = 9150;
 
-/** Default transaction fee in micro-OCT (used when caller doesn't specify). */
+/** Default transaction fee in raw units (used when caller doesn't specify). */
 export const DEFAULT_FEE = '10000';
 
 /** Stealth/claim envelope version used by the node for parsing. */
@@ -145,6 +145,13 @@ export const SK_ACTIVE_CLAIM_AMOUNT = 'activeClaimAmount';
 export const SK_STEALTH_LAST_EPOCH = 'stealthLastEpoch_';  // + address
 export const SK_STEALTH_PENDING = 'stealthPending_';        // + address
 export const SK_STEALTH_CLAIMED = 'stealthClaimed_';        // + address (ids of claimed outputs)
+
+// Fee override keys (stored as string micro-OCT values, empty = use recommended)
+export const SK_FEE_DEFAULT = 'feeOverride_default';
+export const SK_FEE_ENCRYPT = 'feeOverride_encrypt';
+export const SK_FEE_DECRYPT = 'feeOverride_decrypt';
+export const SK_FEE_STEALTH = 'feeOverride_stealth';
+export const SK_FEE_CLAIM = 'feeOverride_claim';
 
 // ─── Error Strings ──────────────────────────────────────────────────────────
 

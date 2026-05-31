@@ -13,6 +13,7 @@ import {
   MSG_STEALTH_SEND, MSG_STEALTH_SCAN,
   MSG_STEALTH_CLAIM, MSG_IMPORT_PAIRING, MSG_REMOVE_PAIRING,
   MSG_GET_PROVER_STATUS, MSG_SET_PROVER_MODE,
+  SK_FEE_DEFAULT, SK_FEE_ENCRYPT, SK_FEE_DECRYPT, SK_FEE_STEALTH, SK_FEE_CLAIM,
 } from '../lib/constants';
 
 // Feature flags (must match background)
@@ -108,8 +109,8 @@ async function sendMsg(type: string, payload: Record<string, unknown> = {}): Pro
 }
 
 function checkForUpdate() {
-  chrome.runtime.requestUpdateCheck().then(([status]) => {
-    if (status === 'update_available') {
+  chrome.runtime.requestUpdateCheck().then((result) => {
+    if (result.status === 'update_available') {
       document.getElementById('update-banner')?.classList.remove('hidden');
     }
   }).catch(() => { /* throttled or unavailable */ });
@@ -829,6 +830,29 @@ const submitShieldBtn = document.getElementById('btn-submit-shield') as HTMLButt
 
 // Send mode toggle (Public / Stealth)
 const sendModeToggle = document.getElementById('send-mode-toggle') as HTMLElement;
+const sendAmountInput = document.getElementById('send-amount') as HTMLInputElement;
+const sendAmountStealth = document.getElementById('send-amount-stealth') as HTMLInputElement;
+const stealthAmountWrap = document.getElementById('send-amount-stealth-wrap') as HTMLElement;
+const STEALTH_AMOUNTS = [1, 10, 100, 1000, 10000, 100000, 1000000];
+let stealthAmountIdx = 0;
+function formatStealthAmount(n: number): string { return n.toLocaleString(); }
+sendAmountStealth.value = formatStealthAmount(STEALTH_AMOUNTS[stealthAmountIdx]);
+
+document.getElementById('stealth-amount-up')!.addEventListener('click', () => {
+  if (stealthAmountIdx < STEALTH_AMOUNTS.length - 1) {
+    stealthAmountIdx++;
+    sendAmountStealth.value = formatStealthAmount(STEALTH_AMOUNTS[stealthAmountIdx]);
+    updateSendState();
+  }
+});
+document.getElementById('stealth-amount-down')!.addEventListener('click', () => {
+  if (stealthAmountIdx > 0) {
+    stealthAmountIdx--;
+    sendAmountStealth.value = formatStealthAmount(STEALTH_AMOUNTS[stealthAmountIdx]);
+    updateSendState();
+  }
+});
+
 document.querySelectorAll('#send-mode-toggle .shield-dir').forEach(btn => {
   btn.addEventListener('click', () => {
     const dir = (btn as HTMLElement).dataset.dir as 'public' | 'stealth';
@@ -837,13 +861,26 @@ document.querySelectorAll('#send-mode-toggle .shield-dir').forEach(btn => {
     btn.classList.add('active');
     sendModeToggle.classList.toggle('unshield', dir === 'stealth');
     submitSendBtn.textContent = sendMode === 'stealth' ? 'Confirm Stealth Send' : 'Confirm Send';
+    // Toggle amount input vs stealth dropdown
+    if (sendMode === 'stealth') {
+      sendAmountInput.classList.add('hidden');
+      stealthAmountWrap.classList.remove('hidden');
+    } else {
+      sendAmountInput.classList.remove('hidden');
+      stealthAmountWrap.classList.add('hidden');
+    }
+    updateSendState();
   });
 });
 
 function updateSendState() {
-  const amount = (document.getElementById('send-amount') as HTMLInputElement).value.trim();
   const to = (document.getElementById('send-to') as HTMLInputElement).value.trim();
-  submitSendBtn.disabled = !(amount && to);
+  if (sendMode === 'stealth') {
+    submitSendBtn.disabled = !(sendAmountStealth.value && to);
+  } else {
+    const amount = sendAmountInput.value.trim();
+    submitSendBtn.disabled = !(amount && to);
+  }
 }
 
 function updateShieldState() {
@@ -866,12 +903,13 @@ document.querySelectorAll('#shield-mode-toggle .shield-dir').forEach(btn => {
 // Validate inputs on typing
 document.getElementById('send-amount')!.addEventListener('input', updateSendState);
 document.getElementById('send-to')!.addEventListener('input', updateSendState);
+sendAmountStealth.addEventListener('input', updateSendState);
 document.getElementById('shield-amount')!.addEventListener('input', updateShieldState);
 
 // Send submit handler
 submitSendBtn.addEventListener('click', async () => {
-  const amount = (document.getElementById('send-amount') as HTMLInputElement).value.trim();
   const to = (document.getElementById('send-to') as HTMLInputElement).value.trim();
+  const amount = sendMode === 'stealth' ? String(STEALTH_AMOUNTS[stealthAmountIdx]) : sendAmountInput.value.trim();
   if (!to || !amount) { showToast('Fill in all fields'); return; }
 
   if (sendMode === 'stealth') {
@@ -883,7 +921,9 @@ submitSendBtn.addEventListener('click', async () => {
       showActionToast(msg, { duration: 4000 });
     } else if (res.jobId) {
       showActionToast('Private transfer started', { action: 'View', goActivity: true });
-      (document.getElementById('send-amount') as HTMLInputElement).value = '';
+      sendAmountInput.value = '';
+      stealthAmountIdx = 0;
+      sendAmountStealth.value = formatStealthAmount(STEALTH_AMOUNTS[0]);
       (document.getElementById('send-to') as HTMLInputElement).value = '';
       submitSendBtn.disabled = true;
       await chrome.storage.local.set({ activeStealthJob: res.jobId, activeStealthStart: Date.now() });
@@ -1129,6 +1169,54 @@ document.getElementById('btn-remove-pairing')!.addEventListener('click', async (
   await sendMsg(MSG_REMOVE_PAIRING);
   showToast('Pairing removed');
   refreshProverStatus();
+});
+
+// --- Settings Modal ---
+// Fee UI displays values in microOCT; storage holds raw values (×1000)
+const FEE_UI_DIVISOR = 1000;
+
+const settingsModal = document.getElementById('settings-modal')!;
+document.getElementById('btn-settings')!.addEventListener('click', async () => {
+  settingsModal.classList.remove('hidden');
+  // Load current overrides and display ÷100
+  const keys = [SK_FEE_DEFAULT, SK_FEE_ENCRYPT, SK_FEE_DECRYPT, SK_FEE_STEALTH, SK_FEE_CLAIM];
+  const stored = await chrome.storage.local.get(keys) as Record<string, string>;
+  const toDisplay = (raw: string | undefined) => raw ? String(Math.round(Number(raw) / FEE_UI_DIVISOR)) : '';
+  (document.getElementById('fee-default') as HTMLInputElement).value = toDisplay(stored[SK_FEE_DEFAULT]);
+  (document.getElementById('fee-encrypt') as HTMLInputElement).value = toDisplay(stored[SK_FEE_ENCRYPT]);
+  (document.getElementById('fee-decrypt') as HTMLInputElement).value = toDisplay(stored[SK_FEE_DECRYPT]);
+  (document.getElementById('fee-stealth') as HTMLInputElement).value = toDisplay(stored[SK_FEE_STEALTH]);
+  (document.getElementById('fee-claim') as HTMLInputElement).value = toDisplay(stored[SK_FEE_CLAIM]);
+});
+document.getElementById('settings-close')!.addEventListener('click', () => settingsModal.classList.add('hidden'));
+settingsModal.addEventListener('click', (e) => { if (e.target === settingsModal) settingsModal.classList.add('hidden'); });
+
+document.getElementById('btn-save-fees')!.addEventListener('click', async () => {
+  const getValue = (id: string) => (document.getElementById(id) as HTMLInputElement).value.trim();
+  const updates: Record<string, string> = {};
+  const removals: string[] = [];
+
+  const fields: [string, string][] = [
+    ['fee-default', SK_FEE_DEFAULT],
+    ['fee-encrypt', SK_FEE_ENCRYPT],
+    ['fee-decrypt', SK_FEE_DECRYPT],
+    ['fee-stealth', SK_FEE_STEALTH],
+    ['fee-claim', SK_FEE_CLAIM],
+  ];
+
+  for (const [inputId, key] of fields) {
+    const val = getValue(inputId);
+    if (val && /^\d+$/.test(val)) {
+      updates[key] = String(Number(val) * FEE_UI_DIVISOR);
+    } else {
+      removals.push(key);
+    }
+  }
+
+  if (Object.keys(updates).length > 0) await chrome.storage.local.set(updates);
+  if (removals.length > 0) await chrome.storage.local.remove(removals);
+  showToast('Fees saved');
+  settingsModal.classList.add('hidden');
 });
 
 init();

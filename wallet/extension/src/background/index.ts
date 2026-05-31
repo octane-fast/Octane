@@ -40,7 +40,6 @@ import {
   ACTION_CRYPTO_COMPLETE, ACTION_CRYPTO_ERROR,
   ERR_LOCKED,
   SIG_ENCRYPTED_BALANCE,
-  DEFAULT_FEE,
   ERR_WALLET_LOCKED,
   ERR_USER_REJECTED_CONNECTION,
   getNetworkInfo,
@@ -67,6 +66,7 @@ import {
 } from '../lib/proofRouter';
 import { parseAmountRaw, formatAmountHuman } from '../lib/units';
 import { buildSignedTx } from '../lib/txBuilder';
+import { getDefaultFee, getOperationFee } from '../lib/fees';
 
 // Inject key provider for prover payload sanitization
 setKeyProvider(() => vault.requirePvacKeys());
@@ -618,7 +618,8 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
           const balInfo = await rpc.getBalance(address);
           const nonce = balInfo.nonce + 1;
           const amountRaw = String(parseAmountRaw(amount));
-          const tx = buildSignedTx({ from: address, to, amount: amountRaw, nonce, ou: fee ?? DEFAULT_FEE, opType: 'standard' });
+          const defaultFee = await getDefaultFee();
+          const tx = buildSignedTx({ from: address, to, amount: amountRaw, nonce, ou: fee ?? defaultFee, opType: 'standard' });
           const result = await rpc.submitTransaction(tx);
           sendResponse(result);
           break;
@@ -758,9 +759,10 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
               const dappAddr = vault.getAddress();
               const balInfo = await rpc.getBalance(dappAddr);
               const nonce = balInfo.nonce + 1;
+              const defaultFee = await getDefaultFee();
               const txPayload = buildSignedTx({
                 from: dappAddr, to: txData.to, amount: amountRaw, nonce,
-                ou: DEFAULT_FEE, opType: 'standard',
+                ou: defaultFee, opType: 'standard',
                 ...(txData.message ? { message: txData.message } : {}),
               });
               const submitRes = await rpc.submitTransaction(txPayload);
@@ -791,9 +793,10 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
               const balInfo2 = await rpc.getBalance(callAddr);
               const nonce2 = balInfo2.nonce + 1;
               const msgField = JSON.stringify(callData.params ?? []);
+              const defaultFee = await getDefaultFee();
               const callPayload = buildSignedTx({
                 from: callAddr, to: callData.contract, amount: amt, nonce: nonce2,
-                ou: callData.ou || DEFAULT_FEE, opType: 'call',
+                ou: callData.ou || defaultFee, opType: 'call',
                 encryptedData: callData.method, message: msgField,
               });
               const callRes = await rpc.submitTransaction(callPayload);
@@ -1361,10 +1364,11 @@ async function submitEncryptJob(
 
     const balInfo = await rpc.getBalance(address);
     const nonce = balInfo.nonce + 1;
-    const feeInfo = await rpc.getRecommendedFee('encrypt');
-    const ou = feeInfo.recommended;
+    const ou = await getOperationFee('encrypt');
 
+    console.log('[octane] submitEncryptJob fee:', ou, 'amount:', String(amountRaw));
     const tx = buildSignedTx({ from: address, to: address, amount: String(amountRaw), nonce, ou, opType: 'encrypt', encryptedData: encData });
+    console.log('[octane] encrypt tx payload:', JSON.stringify({ from: tx.from, to_: tx.to_, amount: tx.amount, nonce: tx.nonce, ou: tx.ou, op_type: tx.op_type }));
     const result = await rpc.submitTransaction(tx);
     completeJob(jobId, result.hash);
   } catch (err) {
@@ -1519,8 +1523,7 @@ async function submitStealthTx(
 
     const balInfo = await rpc.getBalance(address);
     const nonce = balInfo.nonce + 1;
-    const feeInfo = await rpc.getRecommendedFee('stealth');
-    const ou = feeInfo.recommended;
+    const ou = await getOperationFee('stealth');
 
     const tx = buildSignedTx({ from: address, to: 'stealth', amount: '0', nonce, ou, opType: 'stealth', encryptedData: stealthData });
     const result = await rpc.submitTransaction(tx);
@@ -1616,8 +1619,7 @@ async function submitClaimTx(
 
     const balInfo = await rpc.getBalance(address);
     const nonce = balInfo.nonce + 1;
-    const feeInfo = await rpc.getRecommendedFee('claim');
-    const ou = feeInfo.recommended;
+    const ou = await getOperationFee('claim');
 
     const tx = buildSignedTx({ from: address, to: address, amount: '0', nonce, ou, opType: 'claim', encryptedData: claimData });
     const result = await rpc.submitTransaction(tx);
@@ -1663,8 +1665,7 @@ async function submitUnshieldDirect(
 
     const balInfo = await rpc.getBalance(vault.getAddress());
     const nonce = balInfo.nonce + 1;
-    const feeInfo = await rpc.getRecommendedFee('decrypt');
-    const ou = feeInfo.recommended;
+    const ou = await getOperationFee('decrypt');
 
     const address = vault.getAddress();
     const tx = buildSignedTx({ from: address, to: address, amount: String(decAmountRaw), nonce, ou, opType: 'decrypt', encryptedData: encData });
@@ -1741,8 +1742,7 @@ async function resumeUnshieldSubmission(jobId: string, attempt = 0) {
 
     const balInfo = await rpc.getBalance(vault.getAddress());
     const nonce = balInfo.nonce + 1;
-    const feeInfo = await rpc.getRecommendedFee('decrypt');
-    const ou = feeInfo.recommended;
+    const ou = await getOperationFee('decrypt');
 
     const address = vault.getAddress();
     const tx = buildSignedTx({ from: address, to: address, amount: String(decAmountRaw), nonce, ou, opType: 'decrypt', encryptedData: encData });
