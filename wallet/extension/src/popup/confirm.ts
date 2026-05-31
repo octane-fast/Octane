@@ -1,5 +1,7 @@
 // Confirmation popup logic — reads pending request from storage, shows details, sends response
 
+import { MSG_APPROVAL_RESPONSE, SK_APPROVAL_PREFIX } from '../lib/constants';
+
 interface PendingApproval {
   id: string;
   type: 'connect' | 'sign_message' | 'send_transaction' | 'call_contract' | 'pvac_decrypt' | 'pvac_prove';
@@ -23,7 +25,7 @@ const btnApprove = document.getElementById('btn-approve')!;
 const btnReject = document.getElementById('btn-reject')!;
 
 async function load() {
-  const key = `approval_${approvalId}`;
+  const key = `${SK_APPROVAL_PREFIX}${approvalId}`;
   const stored = await chrome.storage.local.get(key);
   const approval: PendingApproval | undefined = stored[key];
 
@@ -99,7 +101,7 @@ async function load() {
 
 function respond(approved: boolean) {
   chrome.runtime.sendMessage({
-    type: 'APPROVAL_RESPONSE',
+    type: MSG_APPROVAL_RESPONSE,
     payload: { id: approvalId, approved },
   }, () => {
     window.close();

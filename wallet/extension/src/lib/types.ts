@@ -1,3 +1,16 @@
+import {
+  APPROVAL_CONNECT, APPROVAL_SIGN_MESSAGE, APPROVAL_SEND_TX,
+  APPROVAL_CALL_CONTRACT, APPROVAL_PVAC_DECRYPT, APPROVAL_PVAC_PROVE,
+} from './constants';
+
+export type ApprovalType =
+  | typeof APPROVAL_CONNECT
+  | typeof APPROVAL_SIGN_MESSAGE
+  | typeof APPROVAL_SEND_TX
+  | typeof APPROVAL_CALL_CONTRACT
+  | typeof APPROVAL_PVAC_DECRYPT
+  | typeof APPROVAL_PVAC_PROVE;
+
 export interface Wallet {
   address: string;
   publicKey: Uint8Array;

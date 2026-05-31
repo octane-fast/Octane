@@ -1,6 +1,8 @@
 // Injected into the page context to provide wallet connectivity per RFC-O-1
 // Supports both direct window.octra.request() and @0xio/sdk postMessage protocol
 
+import { DAPP_REQUEST_TIMEOUT_MS } from '../lib/constants';
+
 console.log('[Octane] inpage.js loaded');
 
 interface PendingRequest {
@@ -48,7 +50,7 @@ const octra = {
           pending.delete(id);
           reject(new Error('Request timed out'));
         }
-      }, 180000);
+      }, DAPP_REQUEST_TIMEOUT_MS);
     });
   },
 
@@ -218,7 +220,7 @@ window.addEventListener('message', (event) => {
         },
       }, '*');
     }
-  }, 180000);
+  }, DAPP_REQUEST_TIMEOUT_MS);
 });
 
 // Signal to SDKs that the provider is ready

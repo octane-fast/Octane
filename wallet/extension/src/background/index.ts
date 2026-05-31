@@ -4,8 +4,7 @@ declare const self: typeof globalThis;
 (globalThis as any).window = self;
 
 import { toBase64, fromBase64 } from '../lib/crypto';
-import { loadWallet, saveWallet } from '../lib/storage';
-import type { StoredState } from '../lib/storage';
+import { loadWallet } from '../lib/storage';
 import * as rpc from '../lib/rpc';
 import {
   isInitialized, initPvacFromKeys, encryptValue, decryptValue,
@@ -15,85 +14,84 @@ import {
   prepareStealthSend, checkStealthOutput, decryptStealthAmount, computeClaimSecret, hexEncode,
 } from '../lib/stealth';
 import { x25519SharedSecret } from '../lib/crypto/stealth';
-import { sha256 } from '@noble/hashes/sha256';
+import { sha256 } from '@noble/hashes/sha2';
 import * as vault from '../lib/keyVault';
+import {
+  FEATURE_TOR, TOR_SOCKS_PORT,
+  SK_TOR_ENABLED, SK_APPROVAL_PREFIX,
+  POPUP_UNLOCK_PATH, POPUP_CONFIRM_PATH,
+  POPUP_UNLOCK_WIDTH, POPUP_UNLOCK_HEIGHT,
+  POPUP_CONFIRM_WIDTH, POPUP_CONFIRM_HEIGHT,
+  APPROVAL_TIMEOUT_MS,
+  APPROVAL_CONNECT, APPROVAL_SIGN_MESSAGE, APPROVAL_SEND_TX,
+  APPROVAL_CALL_CONTRACT, APPROVAL_PVAC_DECRYPT, APPROVAL_PVAC_PROVE,
+  MSG_APPROVAL_RESPONSE, MSG_UNLOCK, MSG_LOCK, MSG_SET_TOR,
+  MSG_SET_RPC_URL, MSG_GET_RPC_URL, MSG_IS_UNLOCKED,
+  MSG_SWITCH_ACCOUNT, MSG_GET_ACCOUNTS, MSG_ADD_ACCOUNT, MSG_GET_ADDRESS,
+  MSG_CHECK_STEALTH_READY, MSG_DERIVE_PVAC_KEYS,
+  MSG_GET_BALANCE, MSG_GET_TOKENS, MSG_GET_ENCRYPTED_BALANCE,
+  MSG_GET_DECRYPTED_BALANCE, MSG_ENCRYPT_BALANCE, MSG_DECRYPT_BALANCE,
+  MSG_GET_JOB_STATUS, MSG_CANCEL_UNSHIELD, MSG_CANCEL_JOB,
+  MSG_SIGN_MESSAGE, MSG_SEND_TRANSACTION, MSG_CONTRACT_CALL, MSG_GET_ACTIVITY, MSG_DAPP_REQUEST,
+  MSG_RPC_PASSTHROUGH, MSG_STEALTH_SEND, MSG_STEALTH_SCAN,
+  MSG_STEALTH_CLAIM, MSG_IMPORT_PAIRING, MSG_REMOVE_PAIRING,
+  MSG_GET_PROVER_STATUS, MSG_SET_PROVER_MODE,
+  ACTION_INIT, ACTION_DECRYPT, ACTION_COMPUTE_UNSHIELD,
+  ACTION_CRYPTO_COMPLETE, ACTION_CRYPTO_ERROR,
+  ERR_LOCKED,
+  SIG_ENCRYPTED_BALANCE,
+  DEFAULT_FEE,
+  ERR_WALLET_LOCKED,
+  ERR_USER_REJECTED_CONNECTION,
+  getNetworkInfo,
+  ERR_INVALID_AMOUNT,
+  ERR_USER_REJECTED_SIGNATURE,
+  ERR_USER_REJECTED_TX,
+  ERR_INVALID_CALLDATA,
+  ERR_USER_REJECTED_CONTRACT,
+  ERR_MISSING_VALUE,
+  ERR_USER_REJECTED_REQUEST,
+  ERR_MISSING_CIPHERTEXT,
+  SK_STEALTH_LAST_EPOCH,
+  SK_STEALTH_PENDING,
+  SK_STEALTH_CLAIMED,
+  STEALTH_DATA_VERSION,
+} from '../lib/constants';
+import { type ApprovalType } from '../lib/types';
+import { enableTorProxy, disableTorProxy, isTorReachable } from '../lib/tor';
+import { runJobCleanup, cleanupOrphanedApprovals } from '../lib/cleanup';
+import { completeJob, resumePendingUnlockJobs } from '../lib/jobStore';
+import {
+  PROVER_URL, isProverAvailable, isRemoteProverConfigured,
+  invalidateProverCache, setKeyProvider, route as routeProof,
+} from '../lib/proofRouter';
+import { parseAmountRaw, formatAmountHuman } from '../lib/units';
+import { buildSignedTx } from '../lib/txBuilder';
 
-// Feature flags
-const FEATURE_TOR = true;
+// Inject key provider for prover payload sanitization
+setKeyProvider(() => vault.requirePvacKeys());
 
-// Tor proxy management (gated behind FEATURE_TOR)
-const TOR_SOCKS_PORT = 9150;
-
-async function enableTorProxy() {
-  if (!FEATURE_TOR) return;
-  const config = {
-    mode: 'pac_script',
-    pacScript: {
-      data: `function FindProxyForURL(url, host) {
-        if (host === "octra.network") {
-          return "SOCKS5 127.0.0.1:${TOR_SOCKS_PORT}";
-        }
-        return "DIRECT";
-      }`,
-    },
-  };
-  await chrome.proxy.settings.set({ value: config, scope: 'regular' });
-}
-
-async function disableTorProxy() {
-  if (!FEATURE_TOR) return;
-  await chrome.proxy.settings.clear({ scope: 'regular' });
+// Mutex for stealth scan/claim to prevent concurrent read-modify-write on pending list
+let stealthLock: Promise<void> = Promise.resolve();
+function withStealthLock<T>(fn: () => Promise<T>): Promise<T> {
+  const prev = stealthLock;
+  let resolve: () => void;
+  stealthLock = new Promise(r => { resolve = r; });
+  return prev.then(fn).finally(() => resolve!());
 }
 
 // Restore Tor state on service worker startup
 if (FEATURE_TOR) {
-  chrome.storage.local.get('torEnabled').then(({ torEnabled }) => {
+  chrome.storage.local.get(SK_TOR_ENABLED).then(({ torEnabled }) => {
     if (torEnabled) enableTorProxy();
   });
 }
 
-// Check for pending unshield jobs on SW startup (crypto may have finished while SW was dead)
-chrome.storage.local.get(null).then((all) => {
-  const keysToRemove: string[] = [];
-  for (const key of Object.keys(all)) {
-    if (!key.startsWith('job_')) continue;
+// Clean up stale jobs and resume in-progress ones on service worker startup
+runJobCleanup(resumeUnshieldSubmission);
 
-    // Clean up terminal job states (done/error/cancelled) and their satellites
-    if (!key.includes('_crypto') && !key.includes('_params') && !key.includes('_stealth') && !key.includes('_claim')) {
-      const job = all[key];
-      const jobId = key.replace('job_', '');
-      if (job.status === 'done' || job.status === 'error' || job.status === 'cancelled') {
-        keysToRemove.push(key, `job_${jobId}_crypto`, `job_${jobId}_params`, `job_${jobId}_stealth`, `job_${jobId}_stealth_params`, `job_${jobId}_claim`);
-      } else if (job.status === 'crypto_done' || job.status === 'pending_unlock') {
-        resumeUnshieldSubmission(jobId);
-      } else if (job.status === 'running') {
-        // SW may have died mid-submission; resume if crypto result exists
-        if (all[`job_${jobId}_crypto`]) {
-          resumeUnshieldSubmission(jobId);
-        } else {
-          // Stale running job with no crypto — mark as error
-          keysToRemove.push(key, `job_${jobId}_params`);
-        }
-      }
-    }
-  }
-  if (keysToRemove.length > 0) {
-    // Filter to only keys that actually exist
-    const existing = keysToRemove.filter(k => k in all);
-    if (existing.length > 0) chrome.storage.local.remove(existing);
-  }
-});
-
-/** Mark a job as done and schedule cleanup of all related keys after 30s */
-function completeJob(storageKey: string, jobId: string, hash: string) {
-  chrome.storage.local.set({ [storageKey]: { status: 'done', hash } });
-  setTimeout(() => {
-    chrome.storage.local.remove([
-      storageKey, `job_${jobId}_crypto`, `job_${jobId}_params`,
-      `job_${jobId}_stealth`, `job_${jobId}_stealth_params`, `job_${jobId}_claim`,
-    ]);
-  }, 30000);
-}
+// Purge orphaned approval entries left by previous SW lifetimes
+cleanupOrphanedApprovals();
 
 // Private balance cache — skip decryption if the on-chain cipher hasn't changed
 let cachedPrivateBalance: string | null = null;
@@ -101,6 +99,8 @@ let cachedCipherStr: string | null = null;
 
 /**
  * Ensure the PVAC public key is registered on-chain for the current wallet.
+ * Unlocks: shield, unshield, stealth send/claim, and receiving stealth payments.
+ * The node uses this key to verify ciphertexts and proofs.
  */
 async function ensurePvacRegistered(): Promise<void> {
   const address = vault.getAddress();
@@ -125,6 +125,7 @@ async function ensurePvacRegistered(): Promise<void> {
 
 /**
  * Ensure the ed25519 public key is registered on-chain for the current wallet.
+ * Unlocks: receiving stealth payments (senders need this for ECDH key exchange).
  */
 async function ensurePublicKeyRegistered(): Promise<void> {
   const address = vault.getAddress();
@@ -148,15 +149,15 @@ function notifyUnlockWaiters() {
 async function ensureUnlocked(): Promise<boolean> {
   if (vault.isUnlocked()) return true;
   // Open popup so user can enter password
-  const popupUrl = chrome.runtime.getURL('dist/src/popup/index.html?unlock=dapp');
+  const popupUrl = chrome.runtime.getURL(POPUP_UNLOCK_PATH);
   const win = await chrome.windows.create({
     url: popupUrl,
     type: 'popup',
-    width: 380,
-    height: 540,
+    width: POPUP_UNLOCK_WIDTH,
+    height: POPUP_UNLOCK_HEIGHT,
     focused: true,
   });
-  // Wait up to 2 minutes for unlock
+  // Wait for unlock or timeout
   return new Promise<boolean>((resolve) => {
     const wrappedResolve = (unlocked: boolean) => {
       // Close the popup after unlock
@@ -171,7 +172,7 @@ async function ensureUnlocked(): Promise<boolean> {
         if (win?.id) chrome.windows.remove(win.id).catch(() => {});
         resolve(false);
       }
-    }, 120_000);
+    }, APPROVAL_TIMEOUT_MS);
   });
 }
 
@@ -182,33 +183,33 @@ interface PendingApprovalEntry {
 const pendingApprovals = new Map<string, PendingApprovalEntry>();
 
 async function requestUserApproval(
-  type: 'connect' | 'sign_message' | 'send_transaction' | 'call_contract' | 'pvac_decrypt' | 'pvac_prove',
+  type: ApprovalType,
   origin: string,
   data: Record<string, unknown>,
 ): Promise<boolean> {
   const id = crypto.randomUUID();
-  const storageKey = `approval_${id}`;
+  const storageKey = `${SK_APPROVAL_PREFIX}${id}`;
   await chrome.storage.local.set({ [storageKey]: { id, type, origin, data } });
 
-  const confirmUrl = chrome.runtime.getURL(`dist/src/popup/confirm.html?id=${id}`);
+  const confirmUrl = chrome.runtime.getURL(`${POPUP_CONFIRM_PATH}?id=${id}`);
   chrome.windows.create({
     url: confirmUrl,
     type: 'popup',
-    width: 400,
-    height: 420,
+    width: POPUP_CONFIRM_WIDTH,
+    height: POPUP_CONFIRM_HEIGHT,
     focused: true,
   });
 
   return new Promise<boolean>((resolve) => {
     pendingApprovals.set(id, { resolve });
-    // Auto-reject after 2 minutes if no response
+    // Auto-reject if no response
     setTimeout(() => {
       if (pendingApprovals.has(id)) {
         pendingApprovals.delete(id);
         chrome.storage.local.remove(storageKey);
         resolve(false);
       }
-    }, 120_000);
+    }, APPROVAL_TIMEOUT_MS);
   });
 }
 
@@ -229,18 +230,18 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
   (async () => {
     try {
       switch (type) {
-        case 'APPROVAL_RESPONSE': {
+        case MSG_APPROVAL_RESPONSE: {
           const { id: approvalId, approved } = payload as { id: string; approved: boolean };
           const entry = pendingApprovals.get(approvalId);
           if (entry) {
             pendingApprovals.delete(approvalId);
-            chrome.storage.local.remove(`approval_${approvalId}`);
+            chrome.storage.local.remove(`${SK_APPROVAL_PREFIX}${approvalId}`);
             entry.resolve(approved);
           }
           sendResponse({ ok: true });
           break;
         }
-        case 'UNLOCK': {
+        case MSG_UNLOCK: {
           const { encryptedSeed, password, hdIndex } = payload as { encryptedSeed: string; password: string; hdIndex?: number };
           await vault.unlock(encryptedSeed, password, hdIndex ?? 0);
           sendResponse({ success: true });
@@ -251,93 +252,70 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
           // Load PVAC keys from persistent storage and init offscreen
           vault.derivePvacKeys().then(async (keys) => {
             if (!keys) {
-              // Skip expensive WASM derivation if account has no funds (can't register anyway)
+              // No persisted keys yet — skip if account has no funds (can't register anyway)
               const bal = await rpc.getBalance(vault.getAddress()).catch(() => null);
               if (!bal || bal.raw === '0') {
                 console.log('[pvac] skipping WASM derivation — account has no funds');
                 return;
               }
-              // Migration: wallet imported before persistent PVAC storage — derive once
-              console.log('[pvac] keys not in local storage, running one-time WASM derivation');
+              // Lazy init: derive PVAC keys on first unlock with funds
+              console.log('[pvac] keys not in local storage, running WASM derivation');
               keys = await vault.generateAndPersistPvacKeys();
             }
-            ensureOffscreen().then(() => {
-              if (offscreenPort) {
-                offscreenPort.postMessage({ action: 'init', pvacSkB64: keys!.skB64, pvacPkB64: keys!.pkB64, keyId: vault.getAddress() });
-              }
-            }).catch(() => {});
+            // Only spin up offscreen WASM if no external prover is available
+            if (!await isProverAvailable() && !await isRemoteProverConfigured()) {
+              ensureOffscreen().then(() => {
+                if (offscreenPort) {
+                  offscreenPort.postMessage({ action: ACTION_INIT, pvacSkB64: keys!.skB64, pvacPkB64: keys!.pkB64, keyId: vault.getAddress() });
+                }
+              }).catch(() => {});
+            }
             // Register PVAC pubkey on-chain if not already
             ensurePvacRegistered().catch(e => console.warn('[pvac] registration failed:', e.message));
           }).catch((e) => { console.warn('[pvac] key load/derive failed:', e); });
           // Resume any pending_unlock jobs now that wallet is unlocked
-          chrome.storage.local.get(null).then((all) => {
-            for (const key of Object.keys(all)) {
-              if (key.startsWith('job_') && !key.includes('_crypto') && !key.includes('_params')) {
-                const job = all[key];
-                if (job.status === 'pending_unlock') {
-                  const jobId = key.replace('job_', '');
-                  resumeUnshieldSubmission(jobId);
-                }
-              }
-            }
-          });
+          resumePendingUnlockJobs(resumeUnshieldSubmission);
           break;
         }
-        case 'LOCK': {
+        case MSG_LOCK: {
           vault.lock();
           cachedPrivateBalance = null;
           cachedCipherStr = null;
           sendResponse({ success: true });
           break;
         }
-        case 'SET_TOR': {
+        case MSG_SET_TOR: {
           const { enabled } = payload as { enabled: boolean };
           if (enabled) {
-            // Check if Tor proxy is reachable before enabling
-            try {
-              const ctrl = new AbortController();
-              const timer = setTimeout(() => ctrl.abort(), 3000);
-              try {
-                await fetch(`http://127.0.0.1:${TOR_SOCKS_PORT}/`, {
-                  method: 'GET',
-                  signal: ctrl.signal,
-                });
-              } catch (e: any) {
-                // AbortError means timeout = nothing listening
-                if (e.name === 'AbortError') {
-                  throw new Error('Tor proxy not reachable');
-                }
-                // Any other error (Failed to fetch, connection reset, etc.)
-                // means the port IS open — SOCKS proxies reject HTTP requests
-              }
-              clearTimeout(timer);
-              await enableTorProxy();
-              sendResponse({ success: true });
-            } catch {
+            const reachable = await isTorReachable();
+            if (!reachable) {
               sendResponse({ error: 'Tor proxy not reachable at 127.0.0.1:' + TOR_SOCKS_PORT });
+              break;
             }
+            await enableTorProxy();
+            sendResponse({ success: true });
           } else {
             await disableTorProxy();
             sendResponse({ success: true });
           }
           break;
         }
-        case 'SET_RPC_URL': {
+        case MSG_SET_RPC_URL: {
           const { url } = payload as { url: string };
           rpc.setRpcUrl(url);
           await chrome.storage.local.set({ rpcUrl: url });
           sendResponse({ success: true, rpcUrl: url });
           break;
         }
-        case 'GET_RPC_URL': {
+        case MSG_GET_RPC_URL: {
           sendResponse({ rpcUrl: rpc.getRpcUrl() });
           break;
         }
-        case 'IS_UNLOCKED': {
+        case MSG_IS_UNLOCKED: {
           sendResponse({ unlocked: vault.isUnlocked() });
           break;
         }
-        case 'SWITCH_ACCOUNT': {
+        case MSG_SWITCH_ACCOUNT: {
           const { hdIndex } = payload as { hdIndex: number };
           vault.setHdIndex(hdIndex);
           cachedPrivateBalance = null;
@@ -347,53 +325,51 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
           // Load PVAC keys for this account and init offscreen
           vault.derivePvacKeys().then(async (keys) => {
             if (!keys) {
-              // Skip expensive WASM derivation if account has no funds
+              // No persisted keys yet — skip if account has no funds (can't register anyway)
               const bal = await rpc.getBalance(vault.getAddress()).catch(() => null);
               if (!bal || bal.raw === '0') {
                 console.log('[pvac] skipping WASM derivation — account has no funds');
                 return;
               }
+              // Lazy init: derive PVAC keys on first switch to a funded account
               keys = await vault.generateAndPersistPvacKeys();
             }
-            ensureOffscreen().then(() => {
-              if (offscreenPort) {
-                offscreenPort.postMessage({ action: 'init', pvacSkB64: keys!.skB64, pvacPkB64: keys!.pkB64, keyId: vault.getAddress() });
-              }
-            }).catch(() => {});
+            // Only spin up offscreen WASM if no external prover is available
+            if (!await isProverAvailable() && !await isRemoteProverConfigured()) {
+              ensureOffscreen().then(() => {
+                if (offscreenPort) {
+                  offscreenPort.postMessage({ action: ACTION_INIT, pvacSkB64: keys!.skB64, pvacPkB64: keys!.pkB64, keyId: vault.getAddress() });
+                }
+              }).catch(() => {});
+            }
             ensurePvacRegistered().catch(e => console.warn('[pvac] registration failed:', e.message));
           }).catch(() => {});
           break;
         }
-        case 'GET_ACCOUNTS': {
+        case MSG_GET_ACCOUNTS: {
           if (!vault.isUnlocked()) { sendResponse({ error: 'locked' }); break; }
           const state = await loadWallet();
           if (!state) { sendResponse({ error: 'no wallet' }); break; }
-          const currentIdx = vault.getHdIndex();
-          const accounts = state.accounts.map(acc => {
-            vault.setHdIndex(acc.hdIndex);
-            return { name: acc.name, hdIndex: acc.hdIndex, address: vault.getAddress() };
-          });
-          vault.setHdIndex(currentIdx);
-          sendResponse({ accounts, activeHdIndex: currentIdx });
+          const accounts = state.accounts.map(acc => ({
+            name: acc.name, hdIndex: acc.hdIndex, address: vault.getAddressForIndex(acc.hdIndex),
+          }));
+          sendResponse({ accounts, activeHdIndex: vault.getHdIndex() });
           break;
         }
-        case 'ADD_ACCOUNT': {
+        case MSG_ADD_ACCOUNT: {
           if (!vault.isUnlocked()) { sendResponse({ error: 'locked' }); break; }
           const { name, hdIndex } = payload as { name: string; hdIndex: number };
-          const currentIdx2 = vault.getHdIndex();
-          vault.setHdIndex(hdIndex);
-          const newAddr = vault.getAddress();
-          vault.setHdIndex(currentIdx2);
+          const newAddr = vault.getAddressForIndex(hdIndex);
           sendResponse({ address: newAddr, name, hdIndex });
           break;
         }
-        case 'GET_ADDRESS': {
-          if (!vault.isUnlocked()) { sendResponse({ error: 'locked' }); break; }
+        case MSG_GET_ADDRESS: {
+          if (!vault.isUnlocked()) { sendResponse({ error: ERR_LOCKED }); break; }
           sendResponse({ address: vault.getAddress() });
           break;
         }
-        case 'CHECK_STEALTH_READY': {
-          if (!vault.isUnlocked()) { sendResponse({ ready: false, reason: 'locked' }); break; }
+        case MSG_CHECK_STEALTH_READY: {
+          if (!vault.isUnlocked()) { sendResponse({ ready: false, reason: ERR_LOCKED }); break; }
           try {
             const addr = vault.getAddress();
             const [pk, pvac, bal] = await Promise.all([
@@ -411,48 +387,50 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
           } catch { sendResponse({ ready: false, reason: 'error' }); }
           break;
         }
-        case 'DERIVE_PVAC_KEYS': {
-          if (!vault.isUnlocked()) { sendResponse({ error: 'locked' }); break; }
+        case MSG_DERIVE_PVAC_KEYS: {
+          if (!vault.isUnlocked()) { sendResponse({ error: ERR_LOCKED }); break; }
           try {
             const keys = await vault.generateAndPersistPvacKeys();
-            // Init offscreen with the newly derived keys
-            ensureOffscreen().then(() => {
-              if (offscreenPort) {
-                offscreenPort.postMessage({ action: 'init', pvacSkB64: keys.skB64, pvacPkB64: keys.pkB64, keyId: vault.getAddress() });
-              }
-            }).catch(() => {});
+            // Only spin up offscreen WASM if no external prover is available
+            if (!await isProverAvailable() && !await isRemoteProverConfigured()) {
+              ensureOffscreen().then(() => {
+                if (offscreenPort) {
+                  offscreenPort.postMessage({ action: ACTION_INIT, pvacSkB64: keys.skB64, pvacPkB64: keys.pkB64, keyId: vault.getAddress() });
+                }
+              }).catch(() => {});
+            }
             sendResponse({ success: true });
           } catch (e: any) {
             sendResponse({ error: e.message || 'PVAC derivation failed' });
           }
           break;
         }
-        case 'GET_BALANCE': {
-          if (!vault.isUnlocked()) { sendResponse({ error: 'locked' }); break; }
+        case MSG_GET_BALANCE: {
+          if (!vault.isUnlocked()) { sendResponse({ error: ERR_LOCKED }); break; }
           const balance = await rpc.getBalance(vault.getAddress());
           sendResponse(balance);
           break;
         }
-        case 'GET_TOKENS': {
-          if (!vault.isUnlocked()) { sendResponse({ error: 'locked' }); break; }
+        case MSG_GET_TOKENS: {
+          if (!vault.isUnlocked()) { sendResponse({ error: ERR_LOCKED }); break; }
           const tokens = await rpc.getTokensByAddress(vault.getAddress());
           sendResponse({ tokens });
           break;
         }
-        case 'GET_ENCRYPTED_BALANCE': {
-          if (!vault.isUnlocked()) { sendResponse({ error: 'locked' }); break; }
-          const msg = new TextEncoder().encode(`octra_encryptedBalance|${vault.getAddress()}`);
+        case MSG_GET_ENCRYPTED_BALANCE: {
+          if (!vault.isUnlocked()) { sendResponse({ error: ERR_LOCKED }); break; }
+          const msg = new TextEncoder().encode(`${SIG_ENCRYPTED_BALANCE}|${vault.getAddress()}`);
           const ebSigRaw = vault.sign(msg);
           const result = await rpc.getEncryptedBalance(vault.getAddress(), toBase64(ebSigRaw), toBase64(vault.getPublicKey()));
           sendResponse({ encryptedBalance: result });
           break;
         }
-        case 'GET_DECRYPTED_BALANCE': {
+        case MSG_GET_DECRYPTED_BALANCE: {
           if (!vault.isUnlocked()) { sendResponse({ error: 'locked' }); break; }
           try {
             const address = vault.getAddress();
             // Fetch encrypted balance from chain
-            const ebMsg = new TextEncoder().encode(`octra_encryptedBalance|${address}`);
+            const ebMsg = new TextEncoder().encode(`${SIG_ENCRYPTED_BALANCE}|${address}`);
             const ebSig = vault.sign(ebMsg);
             const ebResult = await rpc.getEncryptedBalance(address, toBase64(ebSig), toBase64(vault.getPublicKey())) as Record<string, unknown>;
             const cipherStr = String(ebResult?.cipher ?? '');
@@ -473,79 +451,37 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
 
             // Strip "hfhe_v1|" prefix
             const cipherB64 = cipherStr.startsWith('hfhe_v1|') ? cipherStr.slice(8) : cipherStr;
-            console.log('[pvac-decrypt] cipher_b64_len=%d prefix=%s', cipherB64.length, cipherStr.slice(0, 8));
 
-            // Try native prover first (uses cached PVAC keys — no raw seed exposed)
-            let rawValue: bigint | null = null;
-            const proverUp = await isProverAvailable();
-            console.log('[pvac-decrypt] prover_available=%s', proverUp);
-            if (proverUp) {
-              try {
-                const { skB64: pvacSkB64, pkB64: pvacPkB64 } = await vault.requirePvacKeys();
+            // Route decrypt through prover cascade
+            const { skB64: pvacSkB64, pkB64: pvacPkB64 } = await vault.requirePvacKeys();
+            const decPayload = { operation: 'decrypt', pvac_sk_b64: pvacSkB64, pvac_pk_b64: pvacPkB64, cipher_b64: cipherB64 };
+            const decResult = (await routeProof({
+              operation: 'decrypt',
+              payload: decPayload,
+              native: async () => {
                 const ctrl = new AbortController();
                 const timer = setTimeout(() => ctrl.abort(), 3000);
                 const res = await fetch(`${PROVER_URL}/decrypt`, {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ pvac_sk_b64: pvacSkB64, pvac_pk_b64: pvacPkB64, cipher_b64: cipherB64 }),
+                  body: JSON.stringify(decPayload),
                   signal: ctrl.signal,
                 });
                 clearTimeout(timer);
                 const data = await res.json() as { value?: number; error?: string };
-                console.log('[pvac-decrypt] native prover response: value=%s error=%s', data.value, data.error);
-                if (data.value !== undefined) rawValue = BigInt(data.value);
-              } catch (e) {
-                console.warn('[pvac-decrypt] native prover failed:', (e as Error).message);
-              }
-            }
-
-            // Try remote prover via relay (needs PVAC keys)
-            if (rawValue === null) {
-              const remoteConfig = await isRemoteProverConfigured();
-              if (remoteConfig) {
-                console.log('[pvac-decrypt] trying remote prover via relay');
-                try {
-                  const { skB64: pvacSkB64, pkB64: pvacPkB64 } = await vault.requirePvacKeys();
-                  const result = await runRemoteProver('decrypt_bal', {
-                    operation: 'decrypt',
-                    pvac_sk_b64: pvacSkB64,
-                    pvac_pk_b64: pvacPkB64,
-                    cipher_b64: cipherB64,
-                  }, remoteConfig);
-                  if (result.value !== undefined) {
-                    console.log('[pvac-decrypt] remote prover response: value=%s', result.value);
-                    rawValue = BigInt(result.value);
-                  }
-                } catch (e) {
-                  console.warn('[pvac-decrypt] remote prover failed:', (e as Error).message);
-                }
-              }
-            }
-
-            // Fallback: offscreen WASM worker (needs PVAC keys)
-            if (rawValue === null) {
-              console.log('[pvac-decrypt] falling back to WASM offscreen');
-              try {
-                const { skB64: pvacSkB64, pkB64: pvacPkB64 } = await vault.requirePvacKeys();
+                if (data.value !== undefined) return { value: data.value };
+                return null;
+              },
+              wasm: async () => {
                 await ensureOffscreen();
-                const decResult = await chrome.runtime.sendMessage({ target: 'offscreen', action: 'decrypt', pvacSkB64, pvacPkB64, keyId: vault.getAddress(), cipherB64 }) as { value?: string; error?: string };
-                console.log('[pvac-decrypt] WASM result: value=%s error=%s', decResult.value, decResult.error);
-                if (decResult.error) { sendResponse({ error: decResult.error }); break; }
-                rawValue = BigInt(decResult.value ?? '0');
-              } catch (e) {
-                console.warn('[pvac-decrypt] WASM fallback failed:', (e as Error).message);
-                sendResponse({ error: 'Decryption failed — install Octane Accelerator for reliable decryption' });
-                break;
-              }
-            }
+                const r = await chrome.runtime.sendMessage({ target: 'offscreen', action: ACTION_DECRYPT, pvacSkB64, pvacPkB64, keyId: vault.getAddress(), cipherB64 }) as { value?: string; error?: string };
+                if (r.error) throw new Error(r.error);
+                return { value: r.value ?? '0' };
+              },
+            }))!;
+            const rawValue = BigInt(decResult.value as string | number);
 
-            console.log('[pvac-decrypt] rawValue=%s (micro-units)', rawValue.toString());
-
-            // Convert raw to human-readable (1 OCT = 1000000 raw)
-            const whole = rawValue / 1000000n;
-            const frac = rawValue % 1000000n;
-            const balStr = frac === 0n ? `${whole}` : `${whole}.${String(frac).padStart(6, '0').replace(/0+$/, '')}`;
-            console.log('[pvac-decrypt] final balance=%s', balStr);
+            const balStr = formatAmountHuman(rawValue);
             cachedPrivateBalance = balStr;
             cachedCipherStr = cipherStr;
             sendResponse({ balance: balStr });
@@ -560,25 +496,17 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
           }
           break;
         }
-        case 'ENCRYPT_BALANCE': {
+        case MSG_ENCRYPT_BALANCE: {
           if (!vault.isUnlocked()) { sendResponse({ error: 'locked' }); break; }
           const { amount } = payload as { amount: string };
           try {
-            // Parse amount to raw units (1 OCT = 1000000 raw)
-            let amountRaw: bigint;
-            if (amount.includes('.')) {
-              const [intPart, fracPart] = amount.split('.');
-              const frac = (fracPart + '000000').slice(0, 6);
-              amountRaw = BigInt(intPart) * 1000000n + BigInt(frac);
-            } else {
-              amountRaw = BigInt(amount) * 1000000n;
-            }
+            const amountRaw = parseAmountRaw(amount);
             if (amountRaw <= 0n) { sendResponse({ error: 'invalid amount' }); break; }
 
             // Create job and respond immediately
             const jobId = crypto.randomUUID();
             const storageKey = `job_${jobId}`;
-            await chrome.storage.local.set({ [storageKey]: { status: 'running', step: 'Registering PVAC key...' } });
+            await chrome.storage.local.set({ [storageKey]: { status: 'running', step: 'Ensuring PVAC key registered...' } });
             sendResponse({ jobId });
 
             // Ensure PVAC pubkey is registered on-chain
@@ -589,67 +517,42 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
               break;
             }
 
-            // Try native prover first
-            const proverAvailable = await isProverAvailable();
-            if (proverAvailable) {
-              await chrome.storage.local.set({ [storageKey]: { status: 'running', step: 'Proving ⚡ Desktop', prover: 'local' } });
-              const seed = crypto.getRandomValues(new Uint8Array(32));
-              const blinding = crypto.getRandomValues(new Uint8Array(32));
-              let shieldResult: Record<string, string> | null = null;
-              try {
-                shieldResult = await runNativeProver(jobId, {
-                  operation: 'shield',
-                  secretKeyB64: 'vault', // placeholder — sanitizeProverPayload will replace with PVAC keys
-                  amountRaw: String(amountRaw),
-                  seedB64: toBase64(seed),
-                  blindingB64: toBase64(blinding),
-                });
-              } catch {
-                // Fall through to WASM
-                await chrome.storage.local.set({ [storageKey]: { status: 'running', step: 'Prover unavailable, falling back...' } });
-              }
-              if (shieldResult) {
-                const encData = JSON.stringify({
-                  cipher: shieldResult.cipher,
-                  amount_commitment: shieldResult.amount_commitment,
-                  zero_proof: shieldResult.zero_proof,
-                  blinding: shieldResult.blinding,
-                });
-                await chrome.storage.local.set({ [storageKey]: { status: 'running', step: 'Submitting transaction...' } });
-                submitEncryptJob(jobId, amountRaw, encData);
-                break;
-              }
-            }
-
-            // Fallback: in-process WASM — must init WASM from stored keys
-            const { skB64: fallbackSk, pkB64: fallbackPk } = await vault.requirePvacKeys();
-            if (!isInitialized()) {
-              await initPvacFromKeys(fromBase64(fallbackSk), fromBase64(fallbackPk));
-            }
-
-            const seed = crypto.getRandomValues(new Uint8Array(32));
-            const blinding = crypto.getRandomValues(new Uint8Array(32));
-
-            // FHE encrypt
-            const cipherBytes = encryptValue(amountRaw, seed);
-            const cipherStr2 = 'hfhe_v1|' + toBase64(cipherBytes);
-
-            // Pedersen commitment
-            const commitBytes = pedersenCommit(amountRaw, blinding);
-            const commitB64 = toBase64(commitBytes);
-
-            // Zero proof (bound)
-            const zpBytes = makeZeroProofBound(cipherBytes, amountRaw, blinding);
-            const zpStr = 'zkzp_v2|' + toBase64(zpBytes);
-
-            // Build encrypted_data JSON
-            const encData = JSON.stringify({
-              cipher: cipherStr2,
-              amount_commitment: commitB64,
-              zero_proof: zpStr,
-              blinding: toBase64(blinding),
+            // Route through prover cascade
+            const shieldResult = await routeProof({
+              operation: 'shield',
+              payload: {
+                operation: 'shield',
+                amountRaw: String(amountRaw),
+                seedB64: toBase64(crypto.getRandomValues(new Uint8Array(32))),
+                blindingB64: toBase64(crypto.getRandomValues(new Uint8Array(32))),
+              },
+              jobId,
+              onStatus: (step) => chrome.storage.local.set({ [storageKey]: { status: 'running', step } }),
+              wasm: async () => {
+                const { skB64: sk, pkB64: pk } = await vault.requirePvacKeys();
+                if (!isInitialized()) {
+                  await initPvacFromKeys(fromBase64(sk), fromBase64(pk));
+                }
+                const seed = crypto.getRandomValues(new Uint8Array(32));
+                const blinding = crypto.getRandomValues(new Uint8Array(32));
+                const cipherBytes = encryptValue(amountRaw, seed);
+                const commitBytes = pedersenCommit(amountRaw, blinding);
+                const zpBytes = makeZeroProofBound(cipherBytes, amountRaw, blinding);
+                return {
+                  cipher: 'hfhe_v1|' + toBase64(cipherBytes),
+                  amount_commitment: toBase64(commitBytes),
+                  zero_proof: 'zkzp_v2|' + toBase64(zpBytes),
+                  blinding: toBase64(blinding),
+                };
+              },
             });
 
+            const encData = JSON.stringify({
+              cipher: shieldResult!.cipher,
+              amount_commitment: shieldResult!.amount_commitment,
+              zero_proof: shieldResult!.zero_proof,
+              blinding: shieldResult!.blinding,
+            });
             await chrome.storage.local.set({ [storageKey]: { status: 'running', step: 'Submitting transaction...' } });
             submitEncryptJob(jobId, amountRaw, encData);
           } catch (err) {
@@ -657,26 +560,20 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
           }
           break;
         }
-        case 'DECRYPT_BALANCE': {
+        case MSG_DECRYPT_BALANCE: {
           if (!vault.isUnlocked()) { sendResponse({ error: 'locked' }); break; }
           const { amount: decAmt } = payload as { amount: string };
 
           // Validate upfront, then kick off async job
           let decAmountRaw: bigint;
           try {
-            if (decAmt.includes('.')) {
-              const [intPart, fracPart] = decAmt.split('.');
-              const frac = (fracPart + '000000').slice(0, 6);
-              decAmountRaw = BigInt(intPart) * 1000000n + BigInt(frac);
-            } else {
-              decAmountRaw = BigInt(decAmt) * 1000000n;
-            }
+            decAmountRaw = parseAmountRaw(decAmt);
             if (decAmountRaw <= 0n) { sendResponse({ error: 'invalid amount' }); break; }
           } catch { sendResponse({ error: 'invalid amount' }); break; }
 
           // Generate job ID and respond immediately so popup can close
           const jobId = crypto.randomUUID();
-          await chrome.storage.local.set({ [`job_${jobId}`]: { status: 'running', step: 'Registering PVAC key...', startedAt: Date.now() } });
+          await chrome.storage.local.set({ [`job_${jobId}`]: { status: 'running', step: 'Ensuring PVAC key registered...', startedAt: Date.now() } });
           sendResponse({ jobId });
 
           // Ensure PVAC pubkey is registered on-chain
@@ -691,14 +588,14 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
           runUnshieldJob(jobId, decAmountRaw);
           break;
         }
-        case 'GET_JOB_STATUS': {
+        case MSG_GET_JOB_STATUS: {
           const { jobId } = payload as { jobId: string };
           const data = await chrome.storage.local.get(`job_${jobId}`);
           sendResponse(data[`job_${jobId}`] ?? { status: 'unknown' });
           break;
         }
-        case 'CANCEL_UNSHIELD':
-        case 'CANCEL_JOB': {
+        case MSG_CANCEL_UNSHIELD:
+        case MSG_CANCEL_JOB: {
           const { jobId } = payload as { jobId: string };
           const storageKey = `job_${jobId}`;
           await chrome.storage.local.set({ [storageKey]: { status: 'cancelled' } });
@@ -707,126 +604,33 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
           sendResponse({ success: true });
           break;
         }
-        case 'SIGN_MESSAGE': {
+        case MSG_SIGN_MESSAGE: {
           if (!vault.isUnlocked()) { sendResponse({ error: 'locked' }); break; }
           const msgBytes = new TextEncoder().encode(payload.message as string);
           const signature = vault.sign(msgBytes);
           sendResponse({ signature: toBase64(signature) });
           break;
         }
-        case 'SEND_TRANSACTION': {
+        case MSG_SEND_TRANSACTION: {
           if (!vault.isUnlocked()) { sendResponse({ error: 'locked' }); break; }
           const { to, amount, fee } = payload as { to: string; amount: string; fee?: string };
           const address = vault.getAddress();
           const balInfo = await rpc.getBalance(address);
           const nonce = balInfo.nonce + 1;
-          // Convert human-readable amount to raw (1 OCT = 1000000 raw)
-          let amountRaw: string;
-          if (amount.includes('.')) {
-            const [intPart, fracPart] = amount.split('.');
-            const frac = (fracPart + '000000').slice(0, 6);
-            amountRaw = String(BigInt(intPart) * BigInt(1000000) + BigInt(frac));
-          } else {
-            amountRaw = String(BigInt(amount) * BigInt(1000000));
-          }
-          const ou = fee ?? '10000';
-          const timestamp = Math.floor(Date.now() / 1000);
-          // Format timestamp as float string (e.g. "1779113687.0")
-          const tsStr = Number.isInteger(timestamp) ? timestamp + '.0' : String(timestamp);
-          // Build canonical JSON for signing
-          const canonical = `{"from":"${address}","to_":"${to}","amount":"${amountRaw}","nonce":${nonce},"ou":"${ou}","timestamp":${tsStr},"op_type":"standard"}`;
-          const txMsg = new TextEncoder().encode(canonical);
-          const txSig = vault.sign(txMsg);
-          const tx = {
-            from: address,
-            to_: to,
-            amount: amountRaw,
-            nonce,
-            ou,
-            timestamp,
-            op_type: 'standard',
-            signature: toBase64(txSig),
-            public_key: toBase64(vault.getPublicKey()),
-          };
+          const amountRaw = String(parseAmountRaw(amount));
+          const tx = buildSignedTx({ from: address, to, amount: amountRaw, nonce, ou: fee ?? DEFAULT_FEE, opType: 'standard' });
           const result = await rpc.submitTransaction(tx);
           sendResponse(result);
           break;
         }
-        case 'CONTRACT_CALL': {
+        case MSG_CONTRACT_CALL: {
           if (!vault.isUnlocked()) { sendResponse({ error: 'locked' }); break; }
           const { contract, method, params } = payload as { contract: string; method: string; params: unknown[] };
           const result = await rpc.contractCall(contract, method, params ?? [], vault.getAddress());
           sendResponse(result);
           break;
         }
-        case 'SWAP_OCTUSD': {
-          if (!vault.isUnlocked()) { sendResponse({ error: 'locked' }); break; }
-          const { direction, amount } = payload as { direction: 'buy' | 'sell'; amount: string };
-          try {
-            const OCTUSD_ADDR = 'oct2hJMZbBdAAKTBXK61vs1TUx8oQNZVZyEpR4SXGFXgtvE';
-            const balInfo = await rpc.getBalance(vault.getAddress());
-            const nonce = balInfo.nonce + 1;
-            const ou = '200000';
-            const timestamp = Math.floor(Date.now() / 1000);
-            const tsStr = timestamp + '.0';
-
-            let amountRaw: string;
-            let methodName: string;
-            let message: string;
-
-            if (direction === 'buy') {
-              // mint: send OCT (payable), method has no params
-              if (amount.includes('.')) {
-                const [intPart, fracPart] = amount.split('.');
-                const frac = (fracPart + '000000').slice(0, 6);
-                amountRaw = String(BigInt(intPart) * 1000000n + BigInt(frac));
-              } else {
-                amountRaw = String(BigInt(amount) * 1000000n);
-              }
-              methodName = 'mint';
-              message = '[]';
-            } else {
-              // redeem: no OCT sent, pass octUSD amount (raw) as param
-              amountRaw = '0';
-              let redeemRaw: string;
-              if (amount.includes('.')) {
-                const [intPart, fracPart] = amount.split('.');
-                const frac = (fracPart + '000000').slice(0, 6);
-                redeemRaw = String(BigInt(intPart) * 1000000n + BigInt(frac));
-              } else {
-                redeemRaw = String(BigInt(amount) * 1000000n);
-              }
-              methodName = 'redeem';
-              message = JSON.stringify([Number(redeemRaw)]);
-            }
-
-            // Escape for canonical JSON
-            const msgEscaped = message.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-            const swapAddr = vault.getAddress();
-            const canonical = `{"from":"${swapAddr}","to_":"${OCTUSD_ADDR}","amount":"${amountRaw}","nonce":${nonce},"ou":"${ou}","timestamp":${tsStr},"op_type":"call","encrypted_data":"${methodName}","message":"${msgEscaped}"}`;
-            const txMsg = new TextEncoder().encode(canonical);
-            const txSig = vault.sign(txMsg);
-            const tx = {
-              from: swapAddr,
-              to_: OCTUSD_ADDR,
-              amount: amountRaw,
-              nonce,
-              ou,
-              timestamp,
-              op_type: 'call',
-              encrypted_data: methodName,
-              message,
-              signature: toBase64(txSig),
-              public_key: toBase64(vault.getPublicKey()),
-            };
-            const result = await rpc.submitTransaction(tx);
-            sendResponse(result);
-          } catch (err) {
-            sendResponse({ error: (err as Error).message ?? 'swap failed' });
-          }
-          break;
-        }
-        case 'GET_ACTIVITY': {
+        case MSG_GET_ACTIVITY: {
           if (!vault.isUnlocked()) { sendResponse({ error: 'locked' }); break; }
           const history = await rpc.getAccountHistory(vault.getAddress(), 10);
           const txDetails = await Promise.all(
@@ -840,7 +644,7 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
           sendResponse({ transactions: txDetails.filter(Boolean) });
           break;
         }
-        case 'DAPP_REQUEST': {
+        case MSG_DAPP_REQUEST: {
           const { method: dappMethod, params: dappParams, origin: dappOrigin } =
             payload as { method: string; params: unknown[]; origin: string };
 
@@ -850,15 +654,15 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
               let freshlyUnlocked = false;
               if (!vault.isUnlocked()) {
                 const unlocked = await ensureUnlocked();
-                if (!unlocked) { sendResponse({ error: 'Wallet is locked' }); break; }
+                if (!unlocked) { sendResponse({ error: ERR_WALLET_LOCKED }); break; }
                 freshlyUnlocked = true;
               }
               // If user just unlocked, auto-approve since they showed intent
               // Otherwise show approval popup for first-time connections
               if (!approvedOrigins.has(dappOrigin)) {
                 if (!freshlyUnlocked) {
-                  const approved = await requestUserApproval('connect', dappOrigin, {});
-                  if (!approved) { sendResponse({ error: 'User rejected connection' }); break; }
+                  const approved = await requestUserApproval(APPROVAL_CONNECT, dappOrigin, {});
+                  if (!approved) { sendResponse({ error: ERR_USER_REJECTED_CONNECTION }); break; }
                 }
                 approvedOrigins.add(dappOrigin);
               }
@@ -871,7 +675,7 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
             case 'get_balance': {
               if (!vault.isUnlocked()) {
                 const unlocked = await ensureUnlocked();
-                if (!unlocked) { sendResponse({ error: 'Wallet is locked' }); break; }
+                if (!unlocked) { sendResponse({ error: ERR_WALLET_LOCKED }); break; }
               }
               const balRes = await rpc.getBalance(vault.getAddress());
               sendResponse({
@@ -886,15 +690,7 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
             case 'octra_networkInfo':
             case 'getNetworkInfo':
             case 'get_network_info': {
-              sendResponse({
-                id: 'mainnet',
-                name: 'Octra Mainnet',
-                rpcUrl: 'https://octra.network/rpc',
-                explorerUrl: 'https://octrascan.io',
-                supportsPrivacy: true,
-                isTestnet: false,
-                color: '#6366f1',
-              });
+              sendResponse(getNetworkInfo(rpc.getRpcUrl()));
               break;
             }
             case 'octra_permissions':
@@ -915,7 +711,7 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
             case 'getPublicKey': {
               if (!vault.isUnlocked()) {
                 const unlocked = await ensureUnlocked();
-                if (!unlocked) { sendResponse({ error: 'Wallet is locked' }); break; }
+                if (!unlocked) { sendResponse({ error: ERR_WALLET_LOCKED }); break; }
               }
               sendResponse(toBase64(vault.getPublicKey()));
               break;
@@ -925,7 +721,7 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
             case 'sign_message': {
               if (!vault.isUnlocked()) {
                 const unlocked = await ensureUnlocked();
-                if (!unlocked) { sendResponse({ error: 'Wallet is locked' }); break; }
+                if (!unlocked) { sendResponse({ error: ERR_WALLET_LOCKED }); break; }
               }
               const rawParam = (dappParams as unknown[])[0];
               const message = typeof rawParam === 'string' ? rawParam : (rawParam as any)?.message;
@@ -933,8 +729,8 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
                 sendResponse({ error: 'Invalid message' });
                 break;
               }
-              const approved = await requestUserApproval('sign_message', dappOrigin, { message });
-              if (!approved) { sendResponse({ error: 'User rejected signature request' }); break; }
+              const approved = await requestUserApproval(APPROVAL_SIGN_MESSAGE, dappOrigin, { message });
+              if (!approved) { sendResponse({ error: ERR_USER_REJECTED_SIGNATURE }); break; }
               const msgBytes = new TextEncoder().encode(message);
               const sig = vault.sign(msgBytes);
               sendResponse(toBase64(sig));
@@ -945,39 +741,28 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
             case 'send_transaction': {
               if (!vault.isUnlocked()) {
                 const unlocked = await ensureUnlocked();
-                if (!unlocked) { sendResponse({ error: 'Wallet is locked' }); break; }
+                if (!unlocked) { sendResponse({ error: ERR_WALLET_LOCKED }); break; }
               }
               const [txData] = dappParams as [{ to: string; amount: number; message?: string }];
               if (!txData?.to || txData.amount == null) {
-                sendResponse({ error: 'Invalid transaction data' });
+                sendResponse({ error: ERR_INVALID_AMOUNT });
                 break;
               }
-              const txApproved = await requestUserApproval('send_transaction', dappOrigin, {
+              const txApproved = await requestUserApproval(APPROVAL_SEND_TX, dappOrigin, {
                 to: txData.to,
                 amount: txData.amount,
                 message: txData.message,
               });
-              if (!txApproved) { sendResponse({ error: 'User rejected transaction' }); break; }
+              if (!txApproved) { sendResponse({ error: ERR_USER_REJECTED_TX }); break; }
               const amountRaw = String(Math.round(txData.amount * 1_000_000));
               const dappAddr = vault.getAddress();
               const balInfo = await rpc.getBalance(dappAddr);
               const nonce = balInfo.nonce + 1;
-              const ts = Math.floor(Date.now() / 1000);
-              const tsStr = ts + '.0';
-              const canonical = `{"from":"${dappAddr}","to_":"${txData.to}","amount":"${amountRaw}","nonce":${nonce},"ou":"1000","timestamp":${tsStr},"op_type":"standard"}`;
-              const txSig = vault.sign(new TextEncoder().encode(canonical));
-              const txPayload = {
-                from: dappAddr,
-                to_: txData.to,
-                amount: amountRaw,
-                nonce,
-                ou: '1000',
-                timestamp: ts,
-                op_type: 'standard',
+              const txPayload = buildSignedTx({
+                from: dappAddr, to: txData.to, amount: amountRaw, nonce,
+                ou: DEFAULT_FEE, opType: 'standard',
                 ...(txData.message ? { message: txData.message } : {}),
-                signature: toBase64(txSig),
-                public_key: toBase64(vault.getPublicKey()),
-              };
+              });
               const submitRes = await rpc.submitTransaction(txPayload);
               sendResponse({ txHash: submitRes.hash, success: true });
               break;
@@ -987,44 +772,30 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
             case 'call_contract': {
               if (!vault.isUnlocked()) {
                 const unlocked = await ensureUnlocked();
-                if (!unlocked) { sendResponse({ error: 'Wallet is locked' }); break; }
+                if (!unlocked) { sendResponse({ error: ERR_WALLET_LOCKED }); break; }
               }
               const [callData] = dappParams as [{ contract: string; method: string; params: unknown[]; amount?: string; ou?: string }];
               if (!callData?.contract || !callData?.method) {
-                sendResponse({ error: 'Invalid contract call data' });
+                sendResponse({ error: ERR_INVALID_CALLDATA });
                 break;
               }
-              const callApproved = await requestUserApproval('call_contract', dappOrigin, {
+              const callApproved = await requestUserApproval(APPROVAL_CALL_CONTRACT, dappOrigin, {
                 contract: callData.contract,
                 method: callData.method,
                 params: callData.params,
                 amount: callData.amount,
               });
-              if (!callApproved) { sendResponse({ error: 'User rejected contract call' }); break; }
+              if (!callApproved) { sendResponse({ error: ERR_USER_REJECTED_CONTRACT }); break; }
               const amt = callData.amount || '0';
-              const ou = callData.ou || '10000';
               const callAddr = vault.getAddress();
               const balInfo2 = await rpc.getBalance(callAddr);
               const nonce2 = balInfo2.nonce + 1;
-              const ts2 = Math.floor(Date.now() / 1000);
-              const tsStr2 = ts2 + '.0';
               const msgField = JSON.stringify(callData.params ?? []);
-              const escMsg = msgField.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-              const canonical2 = `{"from":"${callAddr}","to_":"${callData.contract}","amount":"${amt}","nonce":${nonce2},"ou":"${ou}","timestamp":${tsStr2},"op_type":"call","encrypted_data":"${callData.method}","message":"${escMsg}"}`;
-              const sig2 = vault.sign(new TextEncoder().encode(canonical2));
-              const callPayload = {
-                from: callAddr,
-                to_: callData.contract,
-                amount: amt,
-                nonce: nonce2,
-                ou,
-                timestamp: ts2,
-                op_type: 'call',
-                encrypted_data: callData.method,
-                message: msgField,
-                signature: toBase64(sig2),
-                public_key: toBase64(vault.getPublicKey()),
-              };
+              const callPayload = buildSignedTx({
+                from: callAddr, to: callData.contract, amount: amt, nonce: nonce2,
+                ou: callData.ou || DEFAULT_FEE, opType: 'call',
+                encryptedData: callData.method, message: msgField,
+              });
               const callRes = await rpc.submitTransaction(callPayload);
               sendResponse({ txHash: callRes.hash, success: true });
               break;
@@ -1045,7 +816,7 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
             }
             default: {
               // --- PVAC / FHE proof methods for dApps ---
-              // Helper: run a PVAC operation through desktop prover → relay → WASM fallback
+              // Helper: run a PVAC operation through the prover cascade
               async function runPvacOp(
                 operation: string,
                 extra: Record<string, string>,
@@ -1053,39 +824,16 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
               ): Promise<Record<string, unknown>> {
                 const { skB64, pkB64 } = await vault.requirePvacKeys();
                 const payload: Record<string, string> = { operation, pvac_sk_b64: skB64, pvac_pk_b64: pkB64, ...extra };
-
-                // 1) Try native desktop prover
-                const proverUp = await isProverAvailable();
-                if (proverUp) {
-                  try {
-                    const result = await runNativeProver(`dapp_${operation}_${Date.now()}`, payload);
-                    return result;
-                  } catch (e) {
-                    console.warn(`[dapp-pvac] native prover failed for ${operation}:`, (e as Error).message);
-                  }
-                }
-
-                // 2) Try remote prover via relay
-                const remoteConfig = await isRemoteProverConfigured();
-                if (remoteConfig) {
-                  try {
-                    const result = await runRemoteProver(`dapp_${operation}_${Date.now()}`, payload, remoteConfig);
-                    return result;
-                  } catch (e) {
-                    console.warn(`[dapp-pvac] remote prover failed for ${operation}:`, (e as Error).message);
-                  }
-                }
-
-                // 3) WASM fallback
-                return wasmFallback();
+                // wasm provided → always returns non-null
+                return (await routeProof({ operation, payload, wasm: wasmFallback }))!;
               }
 
               if (dappMethod === 'octra_pvac_encrypt' || dappMethod === 'pvac_encrypt') {
-                if (!vault.isUnlocked()) { sendResponse({ error: 'Wallet is locked' }); break; }
+                if (!vault.isUnlocked()) { sendResponse({ error: ERR_WALLET_LOCKED }); break; }
                 const [encParams] = dappParams as [{ value: number }];
-                if (encParams?.value == null) { sendResponse({ error: 'Missing value' }); break; }
-                const encApproved = await requestUserApproval('pvac_prove', dappOrigin, { operation: 'Encrypt a value', detail: `Value: ${encParams.value}` });
-                if (!encApproved) { sendResponse({ error: 'User rejected request' }); break; }
+                if (encParams?.value == null) { sendResponse({ error: ERR_MISSING_VALUE }); break; }
+                const encApproved = await requestUserApproval(APPROVAL_PVAC_PROVE, dappOrigin, { operation: 'Encrypt a value', detail: `Value: ${encParams.value}` });
+                if (!encApproved) { sendResponse({ error: ERR_USER_REJECTED_REQUEST }); break; }
                 try {
                   const seed = crypto.getRandomValues(new Uint8Array(32));
                   const seedB64 = toBase64(seed);
@@ -1094,7 +842,6 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
                     seedB64,
                   }, async () => {
                     const { skB64, pkB64 } = await vault.requirePvacKeys();
-                    const { initPvacFromKeys, encryptValue } = await import('../lib/pvac');
                     await initPvacFromKeys(fromBase64(skB64), fromBase64(pkB64));
                     const ct = encryptValue(BigInt(encParams.value), seed);
                     return { ciphertext: toBase64(ct) };
@@ -1104,17 +851,16 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
                 break;
               }
               if (dappMethod === 'octra_pvac_decrypt' || dappMethod === 'pvac_decrypt') {
-                if (!vault.isUnlocked()) { sendResponse({ error: 'Wallet is locked' }); break; }
+                if (!vault.isUnlocked()) { sendResponse({ error: ERR_WALLET_LOCKED }); break; }
                 const [decParams] = dappParams as [{ ciphertext: string }];
-                if (!decParams?.ciphertext) { sendResponse({ error: 'Missing ciphertext' }); break; }
-                const approved = await requestUserApproval('pvac_decrypt', dappOrigin, { operation: 'Decrypt a private value' });
-                if (!approved) { sendResponse({ error: 'User rejected decrypt request' }); break; }
+                if (!decParams?.ciphertext) { sendResponse({ error: ERR_MISSING_CIPHERTEXT }); break; }
+                const approved = await requestUserApproval(APPROVAL_PVAC_DECRYPT, dappOrigin, { operation: 'Decrypt a private value' });
+                if (!approved) { sendResponse({ error: ERR_USER_REJECTED_REQUEST }); break; }
                 try {
                   const result = await runPvacOp('decrypt', {
                     cipher_b64: decParams.ciphertext,
                   }, async () => {
                     const { skB64, pkB64 } = await vault.requirePvacKeys();
-                    const { initPvacFromKeys, decryptValue } = await import('../lib/pvac');
                     await initPvacFromKeys(fromBase64(skB64), fromBase64(pkB64));
                     const ct = fromBase64(decParams.ciphertext);
                     const value = decryptValue(ct);
@@ -1129,7 +875,7 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
                 if (!vault.isUnlocked()) { sendResponse({ error: 'Wallet is locked' }); break; }
                 const [rpParams] = dappParams as [{ ciphertext: string; value: number }];
                 if (!rpParams?.ciphertext || rpParams?.value == null) { sendResponse({ error: 'Missing ciphertext or value' }); break; }
-                const rpApproved = await requestUserApproval('pvac_prove', dappOrigin, { operation: 'Generate range proof' });
+                const rpApproved = await requestUserApproval(APPROVAL_PVAC_PROVE, dappOrigin, { operation: 'Generate range proof' });
                 if (!rpApproved) { sendResponse({ error: 'User rejected request' }); break; }
                 try {
                   const result = await runPvacOp('range_proof', {
@@ -1137,7 +883,6 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
                     amountRaw: String(rpParams.value),
                   }, async () => {
                     const { skB64, pkB64 } = await vault.requirePvacKeys();
-                    const { initPvacFromKeys, makeRangeProof } = await import('../lib/pvac');
                     await initPvacFromKeys(fromBase64(skB64), fromBase64(pkB64));
                     const ct = fromBase64(rpParams.ciphertext);
                     const proof = makeRangeProof(ct, BigInt(rpParams.value));
@@ -1151,7 +896,7 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
                 if (!vault.isUnlocked()) { sendResponse({ error: 'Wallet is locked' }); break; }
                 const [cmParams] = dappParams as [{ value: number; blinding?: string }];
                 if (cmParams?.value == null) { sendResponse({ error: 'Missing value' }); break; }
-                const cmApproved = await requestUserApproval('pvac_prove', dappOrigin, { operation: 'Create Pedersen commitment', detail: `Value: ${cmParams.value}` });
+                const cmApproved = await requestUserApproval(APPROVAL_PVAC_PROVE, dappOrigin, { operation: 'Create Pedersen commitment', detail: `Value: ${cmParams.value}` });
                 if (!cmApproved) { sendResponse({ error: 'User rejected request' }); break; }
                 try {
                   const blinding = cmParams.blinding ? fromBase64(cmParams.blinding) : crypto.getRandomValues(new Uint8Array(32));
@@ -1161,7 +906,6 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
                     blindingB64,
                   }, async () => {
                     const { skB64, pkB64 } = await vault.requirePvacKeys();
-                    const { initPvacFromKeys, pedersenCommit } = await import('../lib/pvac');
                     await initPvacFromKeys(fromBase64(skB64), fromBase64(pkB64));
                     const commitment = pedersenCommit(BigInt(cmParams.value), blinding);
                     return { commitment: toBase64(commitment), blinding: blindingB64 };
@@ -1174,7 +918,7 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
                 if (!vault.isUnlocked()) { sendResponse({ error: 'Wallet is locked' }); break; }
                 const [zpParams] = dappParams as [{ ciphertext: string; value: number; blinding: string }];
                 if (!zpParams?.ciphertext || zpParams?.value == null || !zpParams?.blinding) { sendResponse({ error: 'Missing params' }); break; }
-                const zpApproved = await requestUserApproval('pvac_prove', dappOrigin, { operation: 'Generate zero-knowledge proof' });
+                const zpApproved = await requestUserApproval(APPROVAL_PVAC_PROVE, dappOrigin, { operation: 'Generate zero-knowledge proof' });
                 if (!zpApproved) { sendResponse({ error: 'User rejected request' }); break; }
                 try {
                   const result = await runPvacOp('zero_proof', {
@@ -1183,7 +927,6 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
                     blindingB64: zpParams.blinding,
                   }, async () => {
                     const { skB64, pkB64 } = await vault.requirePvacKeys();
-                    const { initPvacFromKeys, makeZeroProofBound } = await import('../lib/pvac');
                     await initPvacFromKeys(fromBase64(skB64), fromBase64(pkB64));
                     const ct = fromBase64(zpParams.ciphertext);
                     const blindingBytes = fromBase64(zpParams.blinding);
@@ -1219,7 +962,7 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
           }
           break;
         }
-        case 'RPC_PASSTHROUGH': {
+        case MSG_RPC_PASSTHROUGH: {
           const RPC_ALLOWLIST = [
             'octra_balance', 'octra_tokensByAddress', 'octra_account',
             'octra_transaction', 'octra_recommendedFee', 'node_status',
@@ -1234,19 +977,11 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
           sendResponse(result);
           break;
         }
-        case 'STEALTH_SEND': {
+        case MSG_STEALTH_SEND: {
           if (!vault.isUnlocked()) { sendResponse({ error: 'locked' }); break; }
           const { to, amount } = payload as { to: string; amount: string };
           try {
-            // Parse amount
-            let amountRaw: bigint;
-            if (amount.includes('.')) {
-              const [intPart, fracPart] = amount.split('.');
-              const frac = (fracPart + '000000').slice(0, 6);
-              amountRaw = BigInt(intPart) * 1000000n + BigInt(frac);
-            } else {
-              amountRaw = BigInt(amount) * 1000000n;
-            }
+            const amountRaw = parseAmountRaw(amount);
             if (amountRaw <= 0n) { sendResponse({ error: 'invalid amount' }); break; }
 
             // Check recipient has PVAC pubkey registered (required to receive stealth)
@@ -1259,7 +994,7 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
             // Create job and respond immediately
             const jobId = crypto.randomUUID();
             const storageKey = `job_${jobId}`;
-            await chrome.storage.local.set({ [storageKey]: { status: 'running', step: 'Registering PVAC key...' } });
+            await chrome.storage.local.set({ [storageKey]: { status: 'running', step: 'Ensuring PVAC key registered...' } });
             sendResponse({ jobId });
 
             // Ensure PVAC pubkey is registered on-chain
@@ -1277,13 +1012,27 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
           }
           break;
         }
-        case 'STEALTH_SCAN': {
-          if (!vault.isUnlocked()) { sendResponse({ error: 'locked' }); break; }
-          try {
+        case MSG_STEALTH_SCAN: {
+          if (!vault.isUnlocked()) { sendResponse({ error: ERR_LOCKED }); break; }
+          withStealthLock(async () => {
+            const addr = vault.getAddress();
+            const epochKey = SK_STEALTH_LAST_EPOCH + addr;
+            const pendingKey = SK_STEALTH_PENDING + addr;
+
+            // Load last scanned epoch
+            const stored = await chrome.storage.local.get([epochKey, pendingKey]);
+            const lastEpoch = (stored[epochKey] as number) ?? 0;
+            const existingPending = (stored[pendingKey] as Array<Record<string, unknown>>) ?? [];
+
             const x25519Sk = vault.deriveX25519Sk();
-            const { outputs } = await rpc.getStealthOutputs(0);
-            const mine: Array<Record<string, unknown>> = [];
+            const { outputs } = await rpc.getStealthOutputs(lastEpoch);
+            const newFound: Array<Record<string, unknown>> = [];
+            let maxEpoch = lastEpoch;
+
             for (const out of outputs) {
+              const epoch = Number(out.epoch_id ?? 0);
+              if (epoch > maxEpoch) maxEpoch = epoch;
+
               if (Number(out.claimed ?? 0) !== 0) continue;
               try {
                 const ephB64 = String(out.eph_pub ?? '');
@@ -1297,10 +1046,12 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
                 const shared = await checkStealthOutput(x25519Sk, ephRaw, expectedTag);
                 if (!shared) continue;
 
-                // It's ours
-                mine.push({
+                const epoch = Number(out.epoch_id ?? 0);
+                if (epoch > maxEpoch) maxEpoch = epoch;
+
+                newFound.push({
                   id: out.id,
-                  epoch: out.epoch_id ?? 0,
+                  epoch,
                   sender: out.sender_addr ?? '',
                   tx_hash: out.tx_hash ?? '',
                   eph_pub: ephB64,
@@ -1308,13 +1059,29 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
                 });
               } catch { continue; }
             }
-            sendResponse({ outputs: mine });
-          } catch (err) {
+
+            // Merge new discoveries with existing pending (dedup by id)
+            const existingIds = new Set(existingPending.map(o => o.id));
+            const merged = [...existingPending, ...newFound.filter(o => !existingIds.has(o.id))];
+
+            // Storage is the very last thing — only if scan succeeded
+            // Store maxEpoch + 1 so next scan is strictly after all seen outputs
+            // (RPC returns outputs at sinceEpoch inclusively)
+            const nextEpoch = maxEpoch > lastEpoch ? maxEpoch + 1 : lastEpoch;
+            await chrome.storage.local.set({
+              [epochKey]: nextEpoch,
+              [pendingKey]: merged,
+            });
+
+            return merged;
+          }).then(merged => {
+            sendResponse({ outputs: merged });
+          }).catch(err => {
             sendResponse({ error: (err as Error).message });
-          }
+          });
           break;
         }
-        case 'STEALTH_CLAIM': {
+        case MSG_STEALTH_CLAIM: {
           if (!vault.isUnlocked()) { sendResponse({ error: 'locked' }); break; }
           const { id, eph_pub, enc_amount } = payload as { id: string; eph_pub: string; enc_amount: string };
           try {
@@ -1334,8 +1101,19 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
             // Create job and respond immediately
             const jobId = crypto.randomUUID();
             const storageKey = `job_${jobId}`;
-            await chrome.storage.local.set({ [storageKey]: { status: 'running', step: 'Registering PVAC key...' } });
+            await chrome.storage.local.set({ [storageKey]: { status: 'running', step: 'Ensuring PVAC key registered...' } });
             sendResponse({ jobId, amount: String(decResult.amount) });
+
+            // Remove claimed output from pending list (serialized to avoid races)
+            const claimAddr = vault.getAddress();
+            withStealthLock(async () => {
+              const pendingKey = SK_STEALTH_PENDING + claimAddr;
+              const { [pendingKey]: pending } = await chrome.storage.local.get(pendingKey);
+              if (Array.isArray(pending)) {
+                const filtered = pending.filter((o: Record<string, unknown>) => o.id !== id);
+                await chrome.storage.local.set({ [pendingKey]: filtered });
+              }
+            });
 
             // Ensure PVAC pubkey is registered on-chain
             try {
@@ -1352,7 +1130,7 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
           }
           break;
         }
-        case 'IMPORT_PAIRING': {
+        case MSG_IMPORT_PAIRING: {
           // Parse .pair file content and store pairing config
           const { fileContent } = payload as { fileContent: string };
           const lines = fileContent.split('\n');
@@ -1370,12 +1148,12 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
           sendResponse({ ok: true });
           break;
         }
-        case 'REMOVE_PAIRING': {
+        case MSG_REMOVE_PAIRING: {
           await chrome.storage.local.remove('pairingConfig');
           sendResponse({ ok: true });
           break;
         }
-        case 'GET_PROVER_STATUS': {
+        case MSG_GET_PROVER_STATUS: {
           const local = await isProverAvailable();
           const remoteConfig = await isRemoteProverConfigured();
           const { proverMode } = await chrome.storage.local.get('proverMode');
@@ -1389,11 +1167,11 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
           });
           break;
         }
-        case 'SET_PROVER_MODE': {
+        case MSG_SET_PROVER_MODE: {
           const { mode } = payload as { mode: string };
           await chrome.storage.local.set({ proverMode: mode });
           // Invalidate prover cache so next balance refresh respects new mode
-          proverAvailableCache = null;
+          invalidateProverCache();
           sendResponse({ ok: true });
           break;
         }
@@ -1467,214 +1245,19 @@ chrome.runtime.onConnect.addListener((port) => {
 
 // Handle cryptoComplete via sendMessage (fallback when port disconnected during computation)
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-  if (msg.target === 'background' && msg.action === 'cryptoComplete' && msg.jobId) {
+  if (msg.target === 'background' && msg.action === ACTION_CRYPTO_COMPLETE && msg.jobId) {
     chrome.storage.local.set({ [`job_${msg.jobId}_crypto`]: msg.data }).then(() =>
       chrome.storage.local.set({ [`job_${msg.jobId}`]: { status: 'crypto_done', step: 'Submitting transaction...' } })
     ).then(() => resumeUnshieldSubmission(msg.jobId));
     sendResponse({ ok: true });
   }
-  if (msg.target === 'background' && msg.action === 'cryptoError' && msg.jobId) {
+  if (msg.target === 'background' && msg.action === ACTION_CRYPTO_ERROR && msg.jobId) {
     chrome.storage.local.set({ [`job_${msg.jobId}`]: { status: 'error', error: msg.error } });
     sendResponse({ ok: true });
   }
 });
 
 let currentJobStorageKey: string | null = null;
-
-// --- Native Desktop Prover ---
-const PROVER_URL = 'http://127.0.0.1:19876';
-const PROVER_WS_URL = 'ws://127.0.0.1:19876/prove';
-
-// Remote prover pairing config (stored in chrome.storage.local as 'pairingConfig')
-interface PairingConfig {
-  relay: string;   // e.g. "wss://relay.octane.fast"
-  room: string;    // room ID
-  key: string;     // base64 X25519 public key of accelerator
-}
-
-// Cache prover availability to avoid 2s timeout on every balance refresh
-let proverAvailableCache: boolean | null = null;
-let proverCacheExpiry = 0;
-const PROVER_CACHE_TTL_OK = 10_000;   // 10s when available
-const PROVER_CACHE_TTL_FAIL = 30_000; // 30s cooldown on failure
-
-async function isProverAvailable(): Promise<boolean> {
-  const now = Date.now();
-  if (proverAvailableCache !== null && now < proverCacheExpiry) {
-    return proverAvailableCache;
-  }
-  try {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 2000);
-    const res = await fetch(`${PROVER_URL}/health`, { signal: ctrl.signal });
-    clearTimeout(timer);
-    const data = await res.json();
-    const available = data.status === 'ready';
-    proverAvailableCache = available;
-    proverCacheExpiry = now + (available ? PROVER_CACHE_TTL_OK : PROVER_CACHE_TTL_FAIL);
-    return available;
-  } catch {
-    proverAvailableCache = false;
-    proverCacheExpiry = now + PROVER_CACHE_TTL_FAIL;
-    return false;
-  }
-}
-
-async function isRemoteProverConfigured(): Promise<PairingConfig | null> {
-  const { pairingConfig } = await chrome.storage.local.get('pairingConfig');
-  return pairingConfig ?? null;
-}
-
-// Connect to the remote prover through the relay
-function runRemoteProver(jobId: string, payload: Record<string, string>, config: PairingConfig): Promise<Record<string, string>> {
-  return new Promise((resolve, reject) => {
-    const storageKey = `job_${jobId}`;
-    const wsUrl = `${config.relay}/room/${config.room}?role=client`;
-    const ws = new WebSocket(wsUrl);
-    let settled = false;
-    let peerConnected = false;
-
-    ws.onopen = () => {
-      // Wait for peer_connected before sending payload
-    };
-
-    ws.onmessage = async (ev) => {
-      try {
-        const msg = JSON.parse(ev.data as string);
-
-        // Relay control messages
-        if (msg.type === 'peer_connected') {
-          peerConnected = true;
-          // Sanitize payload to remove ed25519 seed before sending to remote prover
-          const safe = await sanitizeProverPayload(payload);
-          ws.send(JSON.stringify({ ...safe, jobId }));
-          return;
-        }
-        if (msg.type === 'peer_disconnected') {
-          if (!settled) {
-            settled = true;
-            ws.close();
-            reject(new Error('Remote prover disconnected'));
-          }
-          return;
-        }
-
-        // Prover messages (forwarded from accelerator)
-        if (msg.type === 'status') {
-          chrome.storage.local.set({ [storageKey]: { status: 'running', step: msg.step } });
-        } else if (msg.type === 'result' && msg.data) {
-          settled = true;
-          ws.close();
-          resolve(msg.data);
-        } else if (msg.type === 'error') {
-          settled = true;
-          ws.close();
-          reject(new Error(msg.error ?? 'Remote prover error'));
-        }
-      } catch (e) {
-        settled = true;
-        ws.close();
-        reject(e);
-      }
-    };
-
-    ws.onerror = () => {
-      if (!settled) {
-        settled = true;
-        reject(new Error('Relay connection failed'));
-      }
-    };
-
-    ws.onclose = () => {
-      if (!settled) {
-        settled = true;
-        reject(new Error('Relay disconnected'));
-      }
-    };
-
-    // Timeout: if no peer_connected after 15s, give up
-    setTimeout(() => {
-      if (!peerConnected && !settled) {
-        settled = true;
-        ws.close();
-        reject(new Error('Remote prover not reachable (timeout)'));
-      }
-    }, 15000);
-  });
-}
-
-/**
- * Ensure prover payload has PVAC keys for initialization.
- * Uses cached PVAC keys (NOT the raw signing seed).
- */
-async function sanitizeProverPayload(payload: Record<string, string>): Promise<Record<string, string>> {
-  if (payload.pvac_sk_b64 && payload.pvac_pk_b64) return payload;
-  if (!vault.isUnlocked()) throw new Error('Wallet locked');
-  const { skB64, pkB64 } = await vault.requirePvacKeys();
-  const sanitized = { ...payload, pvac_sk_b64: skB64, pvac_pk_b64: pkB64 };
-  delete sanitized.secretKeyB64;
-  return sanitized;
-}
-
-function runNativeProver(jobId: string, payload: Record<string, string>): Promise<Record<string, string>> {
-  return new Promise((resolve, reject) => {
-    const storageKey = `job_${jobId}`;
-    const ws = new WebSocket(PROVER_WS_URL);
-    let settled = false;
-
-    // Keep service worker alive during long proving operations (Chrome MV3 kills after ~30s idle)
-    const keepAlive = setInterval(() => {
-      chrome.storage.local.get(storageKey);
-    }, 5000);
-
-    const cleanup = () => { clearInterval(keepAlive); };
-
-    ws.onopen = async () => {
-      const safe = await sanitizeProverPayload(payload);
-      ws.send(JSON.stringify({ ...safe, jobId }));
-    };
-
-    ws.onmessage = (ev) => {
-      try {
-        const msg = JSON.parse(ev.data as string);
-        if (msg.type === 'status') {
-          chrome.storage.local.set({ [storageKey]: { status: 'running', step: msg.step } });
-        } else if (msg.type === 'result' && msg.data) {
-          settled = true;
-          cleanup();
-          ws.close();
-          resolve(msg.data);
-        } else if (msg.type === 'error') {
-          settled = true;
-          cleanup();
-          ws.close();
-          reject(new Error(msg.error ?? 'Prover error'));
-        }
-      } catch (e) {
-        settled = true;
-        cleanup();
-        ws.close();
-        reject(e);
-      }
-    };
-
-    ws.onerror = () => {
-      if (!settled) {
-        settled = true;
-        cleanup();
-        reject(new Error('Prover connection failed'));
-      }
-    };
-
-    ws.onclose = () => {
-      if (!settled) {
-        settled = true;
-        cleanup();
-        reject(new Error('Prover disconnected'));
-      }
-    };
-  });
-}
 
 // --- Async unshield job (delegated to offscreen document) ---
 async function runUnshieldJob(jobId: string, decAmountRaw: bigint) {
@@ -1689,7 +1272,7 @@ async function runUnshieldJob(jobId: string, decAmountRaw: bigint) {
 
     // Fetch current encrypted balance
     await update({ step: 'Fetching encrypted balance...' });
-    const ebMsg = new TextEncoder().encode(`octra_encryptedBalance|${address}`);
+    const ebMsg = new TextEncoder().encode(`${SIG_ENCRYPTED_BALANCE}|${address}`);
     const ebSig = vault.sign(ebMsg);
     const ebResult = await rpc.getEncryptedBalance(address, toBase64(ebSig), toBase64(vault.getPublicKey())) as Record<string, unknown>;
     const currentCipherStr = String(ebResult?.cipher ?? '');
@@ -1715,47 +1298,22 @@ async function runUnshieldJob(jobId: string, decAmountRaw: bigint) {
       blindingB64: toBase64(blinding),
     };
 
-    // Try native desktop prover first (much faster, uses cached PVAC keys)
-    const proverAvailable = await isProverAvailable();
-    if (proverAvailable) {
-      await update({ step: 'Using native prover...' });
-      let nativeResult: Record<string, string> | null = null;
-      try {
-        const { skB64: pvacSk, pkB64: pvacPk } = await vault.requirePvacKeys();
-        const nativePayload = { ...basePayload, pvac_sk_b64: pvacSk, pvac_pk_b64: pvacPk };
-        nativeResult = await runNativeProver(jobId, nativePayload);
-      } catch (proverErr) {
-        console.warn('[octane] native prover failed:', (proverErr as Error).message);
-        await update({ step: 'Local prover unavailable, trying remote...' });
-      }
-      if (nativeResult) {
-        console.log('[octane] native prover result keys:', Object.keys(nativeResult));
-        await update({ step: 'Submitting transaction...' });
-        await submitUnshieldDirect(jobId, storageKey, nativeResult, decAmountRaw);
-        return;
-      }
-    }
-
-    // For remote/WASM paths, derive PVAC keys (need WASM or session cache)
+    // Derive PVAC keys for prover payload
     const { skB64: pvacSkB64, pkB64: pvacPkB64 } = await vault.requirePvacKeys();
     const proverPayload = { ...basePayload, pvac_sk_b64: pvacSkB64, pvac_pk_b64: pvacPkB64, pvacSkB64, pvacPkB64 };
 
-    // Try remote prover via relay (if pairing configured and local unavailable)
-    if (!proverAvailable) {
-      const remoteConfig = await isRemoteProverConfigured();
-      if (remoteConfig) {
-        await update({ step: 'Proving ☁️ Remote', prover: 'remote' });
-        try {
-          const result = await runRemoteProver(jobId, proverPayload, remoteConfig);
-          console.log('[octane] remote prover result keys:', Object.keys(result));
-          // Submit directly from memory — same as native path
-          await update({ step: 'Submitting transaction...' });
-          await submitUnshieldDirect(jobId, storageKey, result, decAmountRaw);
-          return;
-        } catch (remoteErr) {
-          await update({ step: 'Remote prover unavailable, falling back to in-browser...' });
-        }
-      }
+    // Try native → remote via routeProof; WASM uses offscreen document (fire-and-forget)
+    const provedResult = await routeProof({
+      operation: 'unshield',
+      payload: proverPayload,
+      jobId,
+      onStatus: (step, prover) => update({ step, prover }),
+    });
+
+    if (provedResult) {
+      await update({ step: 'Submitting transaction...' });
+      await submitUnshieldDirect(jobId, storageKey, provedResult as Record<string, string>, decAmountRaw);
+      return;
     }
 
     // Fallback: Spin up offscreen document for heavy crypto (WASM)
@@ -1765,7 +1323,7 @@ async function runUnshieldJob(jobId: string, decAmountRaw: bigint) {
     if (!offscreenPort) throw new Error('Offscreen port not connected');
 
     offscreenPort.postMessage({
-      action: 'computeUnshield',
+      action: ACTION_COMPUTE_UNSHIELD,
       jobId,
       ...proverPayload,
       keyId: address,
@@ -1805,28 +1363,10 @@ async function submitEncryptJob(
     const nonce = balInfo.nonce + 1;
     const feeInfo = await rpc.getRecommendedFee('encrypt');
     const ou = feeInfo.recommended;
-    const timestamp = Math.floor(Date.now() / 1000);
-    const tsStr = timestamp + '.0';
 
-    const encDataEscaped = encData.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-    const canonical = `{"from":"${address}","to_":"${address}","amount":"${amountRaw}","nonce":${nonce},"ou":"${ou}","timestamp":${tsStr},"op_type":"encrypt","encrypted_data":"${encDataEscaped}"}`;
-    const txMsg = new TextEncoder().encode(canonical);
-    const txSig = vault.sign(txMsg);
-
-    const tx = {
-      from: address,
-      to_: address,
-      amount: String(amountRaw),
-      nonce,
-      ou,
-      timestamp,
-      op_type: 'encrypt',
-      encrypted_data: encData,
-      signature: toBase64(txSig),
-      public_key: toBase64(vault.getPublicKey()),
-    };
+    const tx = buildSignedTx({ from: address, to: address, amount: String(amountRaw), nonce, ou, opType: 'encrypt', encryptedData: encData });
     const result = await rpc.submitTransaction(tx);
-    completeJob(storageKey, jobId, result.hash);
+    completeJob(jobId, result.hash);
   } catch (err) {
     // Retry indefinitely on any error — user can cancel
     const nextAttempt = attempt + 1;
@@ -1862,7 +1402,7 @@ async function runStealthSendJob(jobId: string, to: string, amountRaw: bigint, a
     const theirSigningPk = fromBase64(recipientPkResult.public_key);
     if (theirSigningPk.length !== 32) throw new Error('Invalid recipient public key');
 
-    // [2] ECDH key exchange + stealth envelope (all via WASM)
+    // [2] ECDH key exchange + stealth envelope
     await update({ step: 'Key exchange...' });
     const ephSk = crypto.getRandomValues(new Uint8Array(32));
     ephSk[0] &= 248;
@@ -1874,141 +1414,67 @@ async function runStealthSendJob(jobId: string, to: string, amountRaw: bigint, a
 
     // [3] Check encrypted balance
     await update({ step: 'Checking encrypted balance...' });
-    const ebMsg = new TextEncoder().encode(`octra_encryptedBalance|${address}`);
+    const ebMsg = new TextEncoder().encode(`${SIG_ENCRYPTED_BALANCE}|${address}`);
     const ebSig = vault.sign(ebMsg);
     const ebResult = await rpc.getEncryptedBalance(address, toBase64(ebSig), toBase64(vault.getPublicKey())) as Record<string, unknown>;
     const currentCipherStr = String(ebResult?.cipher ?? '');
     if (!currentCipherStr || currentCipherStr === '0') throw new Error('No encrypted balance available');
     const currentCipherB64 = currentCipherStr.startsWith('hfhe_v1|') ? currentCipherStr.slice(8) : currentCipherStr;
 
-    // [4] Try native prover first
-    const proverAvailable = await isProverAvailable();
-    if (proverAvailable) {
-      await update({ step: 'Proving ⚡ Desktop', prover: 'local' });
-      const seed = crypto.getRandomValues(new Uint8Array(32));
-      try {
-        const result = await runNativeProver(jobId, {
-          operation: 'stealth',
-          currentCipherB64,
-          amountRaw: String(amountRaw),
-          seedB64: toBase64(seed),
-          blindingB64: toBase64(blinding),
-        });
+    // [4] Route through prover cascade (native → remote → WASM fallback)
+    const stealthSeed = crypto.getRandomValues(new Uint8Array(32));
+    const stealthPayload: Record<string, string> = {
+      operation: 'stealth',
+      currentCipherB64,
+      amountRaw: String(amountRaw),
+      seedB64: toBase64(stealthSeed),
+      blindingB64: toBase64(blinding),
+    };
 
-        // Build stealth_data JSON
-        const stealthData = JSON.stringify({
-          version: 5,
-          delta_cipher: result.cipher,
-          commitment: result.commitment ?? result.amount_commitment,
-          range_proof_delta: result.range_proof_delta,
-          range_proof_balance: result.range_proof_balance,
-          eph_pub: toBase64(stealth.ephPk),
-          stealth_tag: hexEncode(stealth.tag),
-          enc_amount: stealth.encAmount,
-          claim_pub: hexEncode(stealth.claimPub),
-          amount_commitment: result.amount_commitment,
-          send_zero_proof: result.zero_proof ?? result.send_zero_proof,
-        });
-
-        await update({ step: 'Submitting transaction...' });
-        await submitStealthTx(jobId, stealthData, 0);
-        return;
-      } catch {
-        await update({ step: 'Local prover unavailable, trying remote...' });
-      }
-    }
-
-    // [4b] Try remote prover
-    if (!proverAvailable) {
-      const remoteConfig = await isRemoteProverConfigured();
-      if (remoteConfig) {
-        await update({ step: 'Proving ☁️ Remote', prover: 'remote' });
-        const seed = crypto.getRandomValues(new Uint8Array(32));
-        try {
-          const result = await runRemoteProver(jobId, {
-            operation: 'stealth',
-            currentCipherB64,
-            amountRaw: String(amountRaw),
-            seedB64: toBase64(seed),
-            blindingB64: toBase64(blinding),
-          }, remoteConfig);
-
-          const stealthData = JSON.stringify({
-            version: 5,
-            delta_cipher: result.cipher,
-            commitment: result.commitment ?? result.amount_commitment,
-            range_proof_delta: result.range_proof_delta,
-            range_proof_balance: result.range_proof_balance,
-            eph_pub: toBase64(stealth.ephPk),
-            stealth_tag: hexEncode(stealth.tag),
-            enc_amount: stealth.encAmount,
-            claim_pub: hexEncode(stealth.claimPub),
-            amount_commitment: result.amount_commitment,
-            send_zero_proof: result.zero_proof ?? result.send_zero_proof,
-          });
-
-          await update({ step: 'Submitting transaction...' });
-          await submitStealthTx(jobId, stealthData, 0);
-          return;
-        } catch {
-          await update({ step: 'Remote prover unavailable, falling back to in-browser...' });
+    const proverResult = (await routeProof({
+      operation: 'stealth',
+      payload: stealthPayload,
+      jobId,
+      onStatus: (step, prover) => update({ step, prover }),
+      wasm: async () => {
+        if (!isInitialized()) {
+          await vault.requirePvacKeys();
         }
-      }
-    }
+        const seed = crypto.getRandomValues(new Uint8Array(32));
+        const ctDelta = encryptValue(amountRaw, seed);
+        const amtCommit = pedersenCommit(amountRaw, blinding);
+        const sendZkp = makeZeroProofBound(ctDelta, amountRaw, blinding);
+        const currentCipher = fromBase64(currentCipherB64);
+        const ebDecrypted = decryptValue(currentCipher);
+        if (ebDecrypted < amountRaw) throw new Error(`Insufficient encrypted balance: have ${ebDecrypted}, need ${amountRaw}`);
+        const newBalCipher = ctSub(currentCipher, ctDelta);
+        const newBalValue = ebDecrypted - amountRaw;
+        const rpDelta = makeRangeProof(ctDelta, amountRaw);
+        const rpBal = makeRangeProof(newBalCipher, newBalValue);
+        const ctCommitment = commitCt(ctDelta);
+        return {
+          cipher: 'hfhe_v1|' + toBase64(ctDelta),
+          commitment: toBase64(ctCommitment),
+          range_proof_delta: 'rp_v1|' + toBase64(rpDelta),
+          range_proof_balance: 'rp_v1|' + toBase64(rpBal),
+          amount_commitment: toBase64(amtCommit),
+          zero_proof: 'zkzp_v2|' + toBase64(sendZkp),
+        };
+      },
+    }))!;
 
-    // [5] WASM fallback
-    if (!isInitialized()) {
-      await update({ step: 'Proving 🌐 In-Browser', prover: 'wasm' });
-      await vault.requirePvacKeys(); // ensures PVAC keys available
-    }
-
-    // Encrypt delta
-    await update({ step: 'Encrypting amount...' });
-    const seed = crypto.getRandomValues(new Uint8Array(32));
-    const ctDelta = encryptValue(amountRaw, seed);
-    const deltaCipherStr = 'hfhe_v1|' + toBase64(ctDelta);
-
-    // Pedersen commitment + zero proof
-    await update({ step: 'Generating commitment & zero proof...' });
-    const amtCommit = pedersenCommit(amountRaw, blinding);
-    const amtCommitB64 = toBase64(amtCommit);
-    const sendZkp = makeZeroProofBound(ctDelta, amountRaw, blinding);
-    const sendZpStr = 'zkzp_v2|' + toBase64(sendZkp);
-
-    // ct_sub: new balance = current - delta
-    await update({ step: 'Computing new balance...' });
-    const currentCipher = fromBase64(currentCipherB64);
-    const ebDecrypted = decryptValue(currentCipher);
-    if (ebDecrypted < amountRaw) throw new Error(`Insufficient encrypted balance: have ${ebDecrypted}, need ${amountRaw}`);
-    const newBalCipher = ctSub(currentCipher, ctDelta);
-    const newBalValue = ebDecrypted - amountRaw;
-
-    // Range proof for delta
-    await update({ step: 'Range proof (delta)...' });
-    const rpDelta = makeRangeProof(ctDelta, amountRaw);
-    const rpDeltaStr = 'rp_v1|' + toBase64(rpDelta);
-
-    // Range proof for remaining balance
-    await update({ step: 'Range proof (balance)...' });
-    const rpBal = makeRangeProof(newBalCipher, newBalValue);
-    const rpBalStr = 'rp_v1|' + toBase64(rpBal);
-
-    // Ciphertext commitment (hash of pk + ct_delta, used by node for verification)
-    const ctCommitment = commitCt(ctDelta);
-
-    // Build stealth_data
     const stealthData = JSON.stringify({
-      version: 5,
-      delta_cipher: deltaCipherStr,
-      commitment: toBase64(ctCommitment),
-      range_proof_delta: rpDeltaStr,
-      range_proof_balance: rpBalStr,
+      version: STEALTH_DATA_VERSION,
+      delta_cipher: proverResult.cipher,
+      commitment: proverResult.commitment ?? proverResult.amount_commitment,
+      range_proof_delta: proverResult.range_proof_delta,
+      range_proof_balance: proverResult.range_proof_balance,
       eph_pub: toBase64(stealth.ephPk),
       stealth_tag: hexEncode(stealth.tag),
       enc_amount: stealth.encAmount,
       claim_pub: hexEncode(stealth.claimPub),
-      amount_commitment: amtCommitB64,
-      send_zero_proof: sendZpStr,
+      amount_commitment: proverResult.amount_commitment,
+      send_zero_proof: proverResult.zero_proof ?? proverResult.send_zero_proof,
     });
 
     await update({ step: 'Submitting transaction...' });
@@ -2055,28 +1521,10 @@ async function submitStealthTx(
     const nonce = balInfo.nonce + 1;
     const feeInfo = await rpc.getRecommendedFee('stealth');
     const ou = feeInfo.recommended;
-    const timestamp = Math.floor(Date.now() / 1000);
-    const tsStr = timestamp + '.0';
 
-    const encDataEscaped = stealthData.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-    const canonical = `{"from":"${address}","to_":"stealth","amount":"0","nonce":${nonce},"ou":"${ou}","timestamp":${tsStr},"op_type":"stealth","encrypted_data":"${encDataEscaped}"}`;
-    const txMsg = new TextEncoder().encode(canonical);
-    const txSig = vault.sign(txMsg);
-
-    const tx = {
-      from: address,
-      to_: 'stealth',
-      amount: '0',
-      nonce,
-      ou,
-      timestamp,
-      op_type: 'stealth',
-      encrypted_data: stealthData,
-      signature: toBase64(txSig),
-      public_key: toBase64(vault.getPublicKey()),
-    };
+    const tx = buildSignedTx({ from: address, to: 'stealth', amount: '0', nonce, ou, opType: 'stealth', encryptedData: stealthData });
     const result = await rpc.submitTransaction(tx);
-    completeJob(storageKey, jobId, result.hash);
+    completeJob(jobId, result.hash);
   } catch (err) {
     const nextAttempt = attempt + 1;
     await chrome.storage.local.set({ [storageKey]: { status: 'running', step: `Submitting transaction... (retry ${nextAttempt})`, attempt: nextAttempt } });
@@ -2102,99 +1550,43 @@ async function runStealthClaimJob(
 
     const amountRaw = amount;
 
-    // Try native prover first
-    const proverAvailable = await isProverAvailable();
-    if (proverAvailable) {
-      await update({ step: 'Proving ⚡ Desktop', prover: 'local' });
-      const seed = crypto.getRandomValues(new Uint8Array(32));
-      try {
-        const result = await runNativeProver(jobId, {
-          operation: 'claim',
-          amountRaw: String(amountRaw),
-          seedB64: toBase64(seed),
-          blindingB64: toBase64(blinding),
-        });
+    // Route through prover cascade (native → remote → WASM fallback)
+    const claimSeed = crypto.getRandomValues(new Uint8Array(32));
+    const claimPayload: Record<string, string> = {
+      operation: 'claim',
+      amountRaw: String(amountRaw),
+      seedB64: toBase64(claimSeed),
+      blindingB64: toBase64(blinding),
+    };
 
-        // Build claim_data JSON
-        const claimData = JSON.stringify({
-          version: 5,
-          output_id: Number(outputId),
-          claim_cipher: result.cipher,
-          commitment: result.commitment ?? result.amount_commitment,
-          claim_secret: hexEncode(claimSecret),
-          zero_proof: result.zero_proof,
-        });
-
-        await update({ step: 'Submitting transaction...' });
-        await submitClaimTx(jobId, claimData, 0);
-        return;
-      } catch {
-        await update({ step: 'Local prover unavailable, trying remote...' });
-      }
-    }
-
-    // Try remote prover
-    if (!proverAvailable) {
-      const remoteConfig = await isRemoteProverConfigured();
-      if (remoteConfig) {
-        await update({ step: 'Proving ☁️ Remote', prover: 'remote' });
-        const seed = crypto.getRandomValues(new Uint8Array(32));
-        try {
-          const result = await runRemoteProver(jobId, {
-            operation: 'claim',
-            amountRaw: String(amountRaw),
-            seedB64: toBase64(seed),
-            blindingB64: toBase64(blinding),
-          }, remoteConfig);
-
-          const claimData = JSON.stringify({
-            version: 5,
-            output_id: Number(outputId),
-            claim_cipher: result.cipher,
-            commitment: result.commitment ?? result.amount_commitment,
-            claim_secret: hexEncode(claimSecret),
-            zero_proof: result.zero_proof,
-          });
-
-          await update({ step: 'Submitting transaction...' });
-          await submitClaimTx(jobId, claimData, 0);
-          return;
-        } catch {
-          await update({ step: 'Remote prover unavailable, falling back to in-browser...' });
+    const proverResult = (await routeProof({
+      operation: 'claim',
+      payload: claimPayload,
+      jobId,
+      onStatus: (step, prover) => update({ step, prover }),
+      wasm: async () => {
+        if (!isInitialized()) {
+          await vault.requirePvacKeys();
         }
-      }
-    }
+        const seed = crypto.getRandomValues(new Uint8Array(32));
+        const ctClaim = encryptValue(amountRaw, seed);
+        const ctCommitment = commitCt(ctClaim);
+        const zpBytes = makeZeroProofBound(ctClaim, amountRaw, blinding);
+        return {
+          cipher: 'hfhe_v1|' + toBase64(ctClaim),
+          commitment: toBase64(ctCommitment),
+          zero_proof: 'zkzp_v2|' + toBase64(zpBytes),
+        };
+      },
+    }))!;
 
-    // WASM fallback
-    if (!isInitialized()) {
-      await update({ step: 'Proving 🌐 In-Browser', prover: 'wasm' });
-      await vault.requirePvacKeys(); // ensures PVAC keys available
-    }
-
-    // Encrypt claim amount
-    await update({ step: 'Encrypting claim amount...' });
-    const seed = crypto.getRandomValues(new Uint8Array(32));
-    const ctClaim = encryptValue(amountRaw, seed);
-    const claimCipherStr = 'hfhe_v1|' + toBase64(ctClaim);
-
-    // Ciphertext commitment
-    await update({ step: 'Computing commitment...' });
-    const ctCommitment = commitCt(ctClaim);
-    const commitmentB64 = toBase64(ctCommitment);
-
-    // Zero proof
-    await update({ step: 'Generating zero proof...' });
-    const zpBytes = makeZeroProofBound(ctClaim, amountRaw, blinding);
-    const zpStr = 'zkzp_v2|' + toBase64(zpBytes);
-
-    // Build claim_data JSON
     const claimData = JSON.stringify({
-      version: 5,
+      version: STEALTH_DATA_VERSION,
       output_id: Number(outputId),
-      claim_cipher: claimCipherStr,
-      commitment: commitmentB64,
+      claim_cipher: proverResult.cipher,
+      commitment: proverResult.commitment ?? proverResult.amount_commitment,
       claim_secret: hexEncode(claimSecret),
-      zero_proof: zpStr,
+      zero_proof: proverResult.zero_proof,
     });
 
     await update({ step: 'Submitting transaction...' });
@@ -2226,28 +1618,10 @@ async function submitClaimTx(
     const nonce = balInfo.nonce + 1;
     const feeInfo = await rpc.getRecommendedFee('claim');
     const ou = feeInfo.recommended;
-    const timestamp = Math.floor(Date.now() / 1000);
-    const tsStr = timestamp + '.0';
 
-    const encDataEscaped = claimData.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-    const canonical = `{"from":"${address}","to_":"${address}","amount":"0","nonce":${nonce},"ou":"${ou}","timestamp":${tsStr},"op_type":"claim","encrypted_data":"${encDataEscaped}"}`;
-    const txMsg = new TextEncoder().encode(canonical);
-    const txSig = vault.sign(txMsg);
-
-    const tx = {
-      from: address,
-      to_: address,
-      amount: '0',
-      nonce,
-      ou,
-      timestamp,
-      op_type: 'claim',
-      encrypted_data: claimData,
-      signature: toBase64(txSig),
-      public_key: toBase64(vault.getPublicKey()),
-    };
+    const tx = buildSignedTx({ from: address, to: address, amount: '0', nonce, ou, opType: 'claim', encryptedData: claimData });
     const result = await rpc.submitTransaction(tx);
-    completeJob(storageKey, jobId, result.hash);
+    completeJob(jobId, result.hash);
   } catch (err) {
     const msg = (err as Error).message ?? 'unknown error';
     const isFatal = msg.includes('already claimed') ||
@@ -2291,30 +1665,13 @@ async function submitUnshieldDirect(
     const nonce = balInfo.nonce + 1;
     const feeInfo = await rpc.getRecommendedFee('decrypt');
     const ou = feeInfo.recommended;
-    const timestamp = Math.floor(Date.now() / 1000);
-    const tsStr = timestamp + '.0';
 
-    const encDataEscaped = encData.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-    const canonical = `{"from":"${vault.getAddress()}","to_":"${vault.getAddress()}","amount":"${decAmountRaw}","nonce":${nonce},"ou":"${ou}","timestamp":${tsStr},"op_type":"decrypt","encrypted_data":"${encDataEscaped}"}`;
-    const txMsg = new TextEncoder().encode(canonical);
-    const txSig = vault.sign(txMsg);
-
-    const tx = {
-      from: vault.getAddress(),
-      to_: vault.getAddress(),
-      amount: String(decAmountRaw),
-      nonce,
-      ou,
-      timestamp,
-      op_type: 'decrypt',
-      encrypted_data: encData,
-      signature: toBase64(txSig),
-      public_key: toBase64(vault.getPublicKey()),
-    };
+    const address = vault.getAddress();
+    const tx = buildSignedTx({ from: address, to: address, amount: String(decAmountRaw), nonce, ou, opType: 'decrypt', encryptedData: encData });
     console.log('[octane] submitting unshield tx, encData length:', encData.length);
     const result = await rpc.submitTransaction(tx);
     console.log('[octane] submit response:', JSON.stringify(result));
-    completeJob(storageKey, jobId, result.hash);
+    completeJob(jobId, result.hash);
   } catch (err) {
     console.error('[octane] direct submit failed:', (err as Error).message);
     await chrome.storage.local.set({ [storageKey]: { status: 'error', error: (err as Error).message } });
@@ -2386,30 +1743,13 @@ async function resumeUnshieldSubmission(jobId: string, attempt = 0) {
     const nonce = balInfo.nonce + 1;
     const feeInfo = await rpc.getRecommendedFee('decrypt');
     const ou = feeInfo.recommended;
-    const timestamp = Math.floor(Date.now() / 1000);
-    const tsStr = timestamp + '.0';
 
-    const encDataEscaped = encData.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-    const canonical = `{"from":"${vault.getAddress()}","to_":"${vault.getAddress()}","amount":"${decAmountRaw}","nonce":${nonce},"ou":"${ou}","timestamp":${tsStr},"op_type":"decrypt","encrypted_data":"${encDataEscaped}"}`;
-    const txMsg = new TextEncoder().encode(canonical);
-    const txSig = vault.sign(txMsg);
-
-    const tx = {
-      from: vault.getAddress(),
-      to_: vault.getAddress(),
-      amount: String(decAmountRaw),
-      nonce,
-      ou,
-      timestamp,
-      op_type: 'decrypt',
-      encrypted_data: encData,
-      signature: toBase64(txSig),
-      public_key: toBase64(vault.getPublicKey()),
-    };
+    const address = vault.getAddress();
+    const tx = buildSignedTx({ from: address, to: address, amount: String(decAmountRaw), nonce, ou, opType: 'decrypt', encryptedData: encData });
     console.log('[octane] submitting tx:', JSON.stringify({ ...tx, encrypted_data: `[${encData.length} chars]` }));
     const result = await rpc.submitTransaction(tx);
     console.log('[octane] submit response:', JSON.stringify(result));
-    completeJob(storageKey, jobId, result.hash);
+    completeJob(jobId, result.hash);
   } catch (err) {
     const msg = (err as Error).message ?? '';
     console.error('[octane] submit error:', msg, err);

@@ -4,6 +4,12 @@
  * NOTE: chrome.storage is NOT available in offscreen documents.
  */
 
+import {
+  ACTION_INIT, ACTION_DECRYPT, ACTION_COMPUTE_UNSHIELD,
+  ACTION_WARMUP, ACTION_PING,
+  ACTION_CRYPTO_COMPLETE, ACTION_CRYPTO_ERROR,
+} from '../lib/constants';
+
 const worker = new Worker('./dist/pvac-worker.js', { type: 'module' });
 
 let currentJobId: string | null = null;
@@ -26,7 +32,7 @@ worker.onmessage = (ev: MessageEvent) => {
     }
   } else if (msg.type === 'result') {
     // Deliver final result — use sendMessage (wakes SW if dead)
-    const payload = { target: 'background', action: 'cryptoComplete', jobId: currentJobId, data: msg.data };
+    const payload = { target: 'background', action: ACTION_CRYPTO_COMPLETE, jobId: currentJobId, data: msg.data };
     // Try port first
     if (port) {
       try { port.postMessage({ type: 'cryptoResult', jobId: currentJobId, data: msg.data }); return; } catch { port = null; }
@@ -41,7 +47,7 @@ worker.onmessage = (ev: MessageEvent) => {
 };
 
 worker.onerror = (err) => {
-  const payload = { target: 'background', action: 'cryptoError', jobId: currentJobId, error: err.message };
+  const payload = { target: 'background', action: ACTION_CRYPTO_ERROR, jobId: currentJobId, error: err.message };
   if (port) {
     try { port.postMessage({ type: 'jobError', jobId: currentJobId, error: err.message }); return; } catch { port = null; }
   }
@@ -63,27 +69,27 @@ function reconnectAndDeliver() {
 
 // Receive work from background via port
 port!.onMessage.addListener((msg) => {
-  if (msg.action === 'computeUnshield' && msg.jobId) {
+  if (msg.action === ACTION_COMPUTE_UNSHIELD && msg.jobId) {
     currentJobId = msg.jobId;
     if (port) {
       try { port.postMessage({ type: 'jobStatus', jobId: msg.jobId, step: 'Initializing WASM module...' }); } catch { port = null; }
     }
     worker.postMessage(msg);
   }
-  if (msg.action === 'warmup') {
+  if (msg.action === ACTION_WARMUP) {
     // Pre-load WASM module so decrypt is instant later
-    worker.postMessage({ action: 'init', secretKeyB64: msg.secretKeyB64 });
+    worker.postMessage({ action: ACTION_INIT, secretKeyB64: msg.secretKeyB64 });
   }
 });
 
 // Also support ping and decrypt via sendMessage
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.target !== 'offscreen') return;
-  if (msg.action === 'ping') {
+  if (msg.action === ACTION_PING) {
     sendResponse({ pong: true });
     return;
   }
-  if (msg.action === 'decrypt') {
+  if (msg.action === ACTION_DECRYPT) {
     // One-shot decrypt: send to worker, listen for result
     const handler = (ev: MessageEvent) => {
       if (ev.data.type === 'result') {
@@ -92,7 +98,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       }
     };
     worker.addEventListener('message', handler);
-    worker.postMessage({ action: 'decrypt', pvacSkB64: msg.pvacSkB64, pvacPkB64: msg.pvacPkB64, keyId: msg.keyId, cipherB64: msg.cipherB64 });
+    worker.postMessage({ action: ACTION_DECRYPT, pvacSkB64: msg.pvacSkB64, pvacPkB64: msg.pvacPkB64, keyId: msg.keyId, cipherB64: msg.cipherB64 });
     return true; // async sendResponse
   }
   // PVAC proof API actions — relay to worker

@@ -363,6 +363,9 @@ label.toggle-row.compact { font-size: 10px; gap: 4px; height: 22px; margin: 0; m
 .tor-status-connected { color: var(--success); }
 .tor-status-failed { color: var(--danger); }
 
+.update-banner { text-align: center; margin-top: 12px; padding: 8px 12px; border-radius: 6px; background: rgba(38, 98, 231, 0.1); border: 1px solid rgba(38, 98, 231, 0.3); }
+.update-banner a { color: var(--accent); font-size: 12px; text-decoration: none; }
+.update-banner a:hover { text-decoration: underline; }
 
 /* Header actions */
 .header-actions { display: flex; align-items: center; gap: 10px; height: 24px; margin-right: -2px; }

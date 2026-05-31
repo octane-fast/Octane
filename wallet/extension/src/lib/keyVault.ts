@@ -89,6 +89,12 @@ export function getAddress(): string {
   return address;
 }
 
+/** Derive the address for an arbitrary HD index without changing vault state. */
+export function getAddressForIndex(index: number): string {
+  if (!mnemonic) throw new Error('Wallet locked');
+  return walletFromMnemonic(mnemonic, index).address;
+}
+
 /** Get the ed25519 public key (public, not secret). */
 export function getPublicKey(): Uint8Array {
   if (cachedPublicKey) return new Uint8Array(cachedPublicKey);

@@ -1,8 +1,19 @@
 import { createMnemonic, isValidMnemonic, walletFromMnemonic } from '../lib/crypto';
-import { encryptMnemonic, saveWallet, loadWallet, hasWallet, clearWallet } from '../lib/storage';
-import type { Account } from '../lib/storage';
-import { toBase64 } from '../lib/crypto';
-import { txUrl, txLink, setExplorerFromRpc } from '../lib/explorer';
+import { encryptMnemonic, saveWallet, loadWallet, hasWallet } from '../lib/storage';
+import { txUrl, setExplorerFromRpc } from '../lib/explorer';
+import {
+  MSG_UNLOCK, MSG_LOCK, MSG_SET_TOR,
+  MSG_SET_RPC_URL, MSG_GET_RPC_URL, MSG_IS_UNLOCKED,
+  MSG_SWITCH_ACCOUNT, MSG_GET_ACCOUNTS, MSG_ADD_ACCOUNT, MSG_GET_ADDRESS,
+  MSG_CHECK_STEALTH_READY, MSG_DERIVE_PVAC_KEYS,
+  MSG_GET_BALANCE, MSG_GET_DECRYPTED_BALANCE,
+  MSG_ENCRYPT_BALANCE, MSG_DECRYPT_BALANCE,
+  MSG_GET_JOB_STATUS, MSG_CANCEL_JOB, MSG_SEND_TRANSACTION,
+  MSG_GET_ACTIVITY,
+  MSG_STEALTH_SEND, MSG_STEALTH_SCAN,
+  MSG_STEALTH_CLAIM, MSG_IMPORT_PAIRING, MSG_REMOVE_PAIRING,
+  MSG_GET_PROVER_STATUS, MSG_SET_PROVER_MODE,
+} from '../lib/constants';
 
 // Feature flags (must match background)
 const FEATURE_TOR = true;
@@ -72,7 +83,7 @@ function showStealthClaimToast(outputs: Array<Record<string, unknown>>) {
     switchToTab('activity');
     for (const out of outputs) {
       try {
-        const res = await sendMsg('STEALTH_CLAIM', { id: out.id, eph_pub: out.eph_pub, enc_amount: out.enc_amount }) as { jobId?: string; amount?: string; error?: string };
+        const res = await sendMsg(MSG_STEALTH_CLAIM, { id: out.id, eph_pub: out.eph_pub, enc_amount: out.enc_amount }) as { jobId?: string; amount?: string; error?: string };
         if (res.jobId) {
           const claimAmount = res.amount ?? '';
           await chrome.storage.local.set({ activeClaimJob: res.jobId, activeClaimStart: Date.now(), activeClaimAmount: claimAmount });
@@ -94,6 +105,14 @@ function showStealthClaimToast(outputs: Array<Record<string, unknown>>) {
 
 async function sendMsg(type: string, payload: Record<string, unknown> = {}): Promise<unknown> {
   return chrome.runtime.sendMessage({ type, payload });
+}
+
+function checkForUpdate() {
+  chrome.runtime.requestUpdateCheck().then(([status]) => {
+    if (status === 'update_available') {
+      document.getElementById('update-banner')?.classList.remove('hidden');
+    }
+  }).catch(() => { /* throttled or unavailable */ });
 }
 
 // Init
@@ -121,11 +140,12 @@ async function init() {
   const walletExists = await hasWallet();
   if (walletExists) {
     // Skip lock screen if vault is already unlocked in the service worker
-    const status = await sendMsg('IS_UNLOCKED') as { unlocked?: boolean };
+    const status = await sendMsg(MSG_IS_UNLOCKED) as { unlocked?: boolean };
     if (status.unlocked) {
       await maybeShowProverRec();
     } else {
       showScreen(screenUnlock);
+      checkForUpdate();
     }
   } else {
     showScreen(screenSetup);
@@ -164,7 +184,7 @@ function setupTorToggles() {
   async function onTorToggle(enabled: boolean) {
     if (enabled) {
       setTorStatus('checking');
-      const res = await sendMsg('SET_TOR', { enabled: true }) as { success?: boolean; error?: string };
+      const res = await sendMsg(MSG_SET_TOR, { enabled: true }) as { success?: boolean; error?: string };
       if (res.error) {
         setTorStatus('failed');
         setAllToggles(false);
@@ -181,7 +201,7 @@ function setupTorToggles() {
         setAllToggles(true);
         return;
       }
-      await sendMsg('SET_TOR', { enabled: false });
+      await sendMsg(MSG_SET_TOR, { enabled: false });
       await chrome.storage.local.set({ torEnabled: false });
       setAllToggles(false);
       setTorStatus('off');
@@ -249,8 +269,8 @@ document.getElementById('btn-confirm-create')!.addEventListener('click', async (
     accounts: [{ name: 'Account 1', hdIndex: 0, address: wallet.address }],
     activeIndex: 0,
   });
-  await sendMsg('UNLOCK', { encryptedSeed: encrypted, password: pw, hdIndex: 0 });
-  await sendMsg('DERIVE_PVAC_KEYS');
+  await sendMsg(MSG_UNLOCK, { encryptedSeed: encrypted, password: pw, hdIndex: 0 });
+  await sendMsg(MSG_DERIVE_PVAC_KEYS);
   pvacOverlay.classList.add('hidden');
   await maybeShowProverRec();
 });
@@ -272,8 +292,8 @@ document.getElementById('btn-confirm-import')!.addEventListener('click', async (
     accounts: [{ name: 'Account 1', hdIndex: 0, address: wallet.address }],
     activeIndex: 0,
   });
-  await sendMsg('UNLOCK', { encryptedSeed: encrypted, password: pw, hdIndex: 0 });
-  await sendMsg('DERIVE_PVAC_KEYS');
+  await sendMsg(MSG_UNLOCK, { encryptedSeed: encrypted, password: pw, hdIndex: 0 });
+  await sendMsg(MSG_DERIVE_PVAC_KEYS);
   pvacOverlay.classList.add('hidden');
   await maybeShowProverRec();
 });
@@ -296,7 +316,7 @@ async function doUnlock() {
   if (!state) { showToast('No wallet found'); return; }
   const activeAccount = state.accounts[state.activeIndex];
   try {
-    const res = await sendMsg('UNLOCK', { encryptedSeed: state.encryptedSeed, password: pw, hdIndex: activeAccount.hdIndex }) as { success?: boolean; error?: string };
+    const res = await sendMsg(MSG_UNLOCK, { encryptedSeed: state.encryptedSeed, password: pw, hdIndex: activeAccount.hdIndex }) as { success?: boolean; error?: string };
     if ('error' in res) { showToast('Incorrect password'); return; }
     await maybeShowProverRec();
   } catch (e) {
@@ -308,7 +328,7 @@ async function doUnlock() {
 async function maybeShowProverRec() {
   const { proverRecDismissed } = await chrome.storage.local.get('proverRecDismissed');
   if (proverRecDismissed) { await loadMainScreen(); return; }
-  const status = await sendMsg('GET_PROVER_STATUS') as { local?: boolean; remote?: boolean };
+  const status = await sendMsg(MSG_GET_PROVER_STATUS) as { local?: boolean; remote?: boolean };
   if (status.local || status.remote) { await loadMainScreen(); return; }
   showScreen(screenProverRec);
 }
@@ -331,7 +351,7 @@ document.getElementById('btn-download-accelerator-cta')!.addEventListener('click
 
 // Lock
 document.getElementById('btn-lock')?.addEventListener('click', async () => {
-  await sendMsg('LOCK');
+  await sendMsg(MSG_LOCK);
   showScreen(screenUnlock);
 });
 
@@ -396,7 +416,7 @@ function formatTotal(n: number): string {
 
 async function refreshPublicBalance() {
   const epoch = accountEpoch;
-  const balRes = await sendMsg('GET_BALANCE') as { formatted?: string; error?: string };
+  const balRes = await sendMsg(MSG_GET_BALANCE) as { formatted?: string; error?: string };
   if (epoch !== accountEpoch) return; // stale
   const publicBal = balRes.formatted ?? '0';
   document.getElementById('display-public-balance')!.textContent = publicBal;
@@ -413,7 +433,7 @@ async function refreshPrivateBalance() {
   const epoch = accountEpoch;
   const privEl = document.getElementById('display-private-balance')!;
   try {
-    const privPromise = sendMsg('GET_DECRYPTED_BALANCE') as Promise<{ balance?: string; error?: string }>;
+    const privPromise = sendMsg(MSG_GET_DECRYPTED_BALANCE) as Promise<{ balance?: string; error?: string }>;
     const timeout = new Promise<{ error: string }>((resolve) => setTimeout(() => resolve({ error: 'timeout' }), 8000));
     const privRes = await Promise.race([privPromise, timeout]);
     if (epoch !== accountEpoch) return; // stale
@@ -432,144 +452,16 @@ async function refreshPrivateBalance() {
   } catch { /* silent */ }
 }
 
-async function refreshTokens() {
-  const epoch = accountEpoch;
-  const tokRes = await sendMsg('GET_TOKENS') as { tokens?: Array<{ name: string; symbol: string; balance: string; decimals: number }> };
-  if (epoch !== accountEpoch) return; // stale
 
-  // Find octUSD balance from token list (used by swap modal)
-  const octUsd = tokRes.tokens?.find(t => t.symbol === 'octUSD');
-  const octUsdBal = octUsd ? (Number(octUsd.balance) / Math.pow(10, octUsd.decimals)).toFixed(octUsd.decimals > 4 ? 4 : octUsd.decimals) : '0';
-  // Store for swap modal reference
-  (window as any).__octUsdBal = octUsdBal;
-}
-
-// --- octUSD Swap Modal ---
-const OCTUSD_CONTRACT = 'oct2hJMZbBdAAKTBXK61vs1TUx8oQNZVZyEpR4SXGFXgtvE';
-let swapDirection: 'buy' | 'sell' = 'buy';
-let octUsdPrice = 0; // raw int from contract (e.g. 56877 means $0.056877/OCT)
-
-async function fetchOctUsdPrice(): Promise<number> {
-  const res = await sendMsg('RPC_PASSTHROUGH', { method: 'contract_call', params: [OCTUSD_CONTRACT, 'get_octra_price', [], ''] }) as { result?: number; error?: string };
-  if (res.result !== undefined) {
-    octUsdPrice = Number(res.result);
-  }
-  return octUsdPrice;
-}
-
-function openSwapModal() {
-  const modal = document.getElementById('swap-modal')!;
-  modal.classList.remove('hidden');
-  swapDirection = 'buy';
-  updateSwapTabs();
-  (document.getElementById('swap-input') as HTMLInputElement).value = '';
-  document.getElementById('swap-preview')!.textContent = '';
-  document.getElementById('swap-result')!.textContent = '';
-  (document.getElementById('btn-swap-confirm') as HTMLButtonElement).disabled = true;
-  // Fetch price
-  document.getElementById('swap-rate')!.textContent = 'Loading rate...';
-  fetchOctUsdPrice().then(p => {
-    if (p > 0) {
-      const priceUsd = (p / 1_000_000).toFixed(6);
-      document.getElementById('swap-rate')!.textContent = `1 OCT = ${priceUsd} octUSD`;
-    } else {
-      document.getElementById('swap-rate')!.textContent = 'Could not fetch price';
-    }
-  });
-}
-
-function updateSwapTabs() {
-  document.querySelectorAll('.swap-tab').forEach(t => {
-    t.classList.toggle('active', (t as HTMLElement).dataset.dir === swapDirection);
-  });
-  const label = document.getElementById('swap-input-label')!;
-  const input = document.getElementById('swap-input') as HTMLInputElement;
-  if (swapDirection === 'buy') {
-    label.textContent = 'You pay (OCT)';
-    input.placeholder = '0.00';
-  } else {
-    label.textContent = 'You sell (octUSD)';
-    input.placeholder = '0.00';
-  }
-  document.getElementById('swap-preview')!.textContent = '';
-  input.value = '';
-  (document.getElementById('btn-swap-confirm') as HTMLButtonElement).disabled = true;
-}
-
-document.getElementById('swap-close')!.addEventListener('click', () => {
-  document.getElementById('swap-modal')!.classList.add('hidden');
-});
-
-document.querySelectorAll('.swap-tab').forEach(tab => {
-  tab.addEventListener('click', () => {
-    swapDirection = (tab as HTMLElement).dataset.dir as 'buy' | 'sell';
-    updateSwapTabs();
-  });
-});
-
-document.getElementById('swap-input')!.addEventListener('input', () => {
-  const val = (document.getElementById('swap-input') as HTMLInputElement).value.trim();
-  const num = parseFloat(val);
-  const preview = document.getElementById('swap-preview')!;
-  const btn = document.getElementById('btn-swap-confirm') as HTMLButtonElement;
-  if (!val || isNaN(num) || num <= 0 || octUsdPrice <= 0) {
-    preview.textContent = '';
-    btn.disabled = true;
-    return;
-  }
-  btn.disabled = false;
-  if (swapDirection === 'buy') {
-    // Paying OCT, receiving octUSD: mint_amount = (oct_raw * price) / 1e6
-    const octUsdReceived = (num * octUsdPrice) / 1_000_000;
-    preview.textContent = `≈ ${octUsdReceived.toFixed(4)} octUSD`;
-  } else {
-    // Selling octUSD, receiving OCT: oct = (amount * 1e6) / price
-    const octReceived = (num * 1_000_000) / octUsdPrice;
-    preview.textContent = `≈ ${octReceived.toFixed(6)} OCT`;
-  }
-});
-
-document.getElementById('btn-swap-confirm')!.addEventListener('click', async () => {
-  const btn = document.getElementById('btn-swap-confirm') as HTMLButtonElement;
-  const resultEl = document.getElementById('swap-result')!;
-  const val = (document.getElementById('swap-input') as HTMLInputElement).value.trim();
-  const num = parseFloat(val);
-  if (!val || isNaN(num) || num <= 0) return;
-
-  btn.disabled = true;
-  btn.textContent = 'Submitting...';
-  resultEl.textContent = '';
-
-  try {
-    let res: { hash?: string; error?: string };
-    if (swapDirection === 'buy') {
-      // mint: send OCT to contract
-      res = await sendMsg('SWAP_OCTUSD', { direction: 'buy', amount: val }) as { hash?: string; error?: string };
-    } else {
-      // redeem: burn octUSD
-      res = await sendMsg('SWAP_OCTUSD', { direction: 'sell', amount: val }) as { hash?: string; error?: string };
-    }
-    if (res.error) {
-      resultEl.textContent = res.error;
-      resultEl.style.color = 'var(--error, #ef4444)';
-    } else {
-      resultEl.textContent = `Success! TX: ${res.hash?.slice(0, 12)}…`;
-      resultEl.style.color = 'var(--success, #22c55e)';
-      (document.getElementById('swap-input') as HTMLInputElement).value = '';
-      document.getElementById('swap-preview')!.textContent = '';
-    }
-  } catch (err) {
-    resultEl.textContent = (err as Error).message ?? 'Unknown error';
-    resultEl.style.color = 'var(--error, #ef4444)';
-  }
-  btn.textContent = 'Confirm Swap';
-  btn.disabled = false;
-});
 
 async function scanForStealthPayments() {
+  // Don't show claim toast while a claim is already in progress
+  const { activeClaimJob } = await chrome.storage.local.get('activeClaimJob');
+  if (activeClaimJob) return;
+
   const epoch = accountEpoch;
   try {
-    const res = await sendMsg('STEALTH_SCAN', {}) as { outputs?: Array<Record<string, unknown>>; error?: string };
+    const res = await sendMsg(MSG_STEALTH_SCAN, {}) as { outputs?: Array<Record<string, unknown>>; error?: string };
     if (epoch !== accountEpoch) return; // stale
     if (res.outputs && res.outputs.length > 0) {
       showStealthClaimToast(res.outputs);
@@ -582,10 +474,9 @@ const PollingService = {
 
   start() {
     this.stop(); // Clear any existing timers
-    // Public balance + tokens: every 3s (fast, no PVAC)
+    // Public balance: every 3s (fast, no PVAC)
     this.timers.push(setInterval(async () => {
       await refreshPublicBalance();
-      await refreshTokens();
     }, 3000));
     // Private balance: every 10s (may be slow due to PVAC)
     this.timers.push(setInterval(() => { refreshPrivateBalance(); }, 10000));
@@ -610,13 +501,13 @@ async function loadMainScreen() {
   checkActiveJob();
 
   // Update prover mode label in header
-  const status = await sendMsg('GET_PROVER_STATUS') as { local?: boolean; remote?: boolean; mode?: string };
+  const status = await sendMsg(MSG_GET_PROVER_STATUS) as { local?: boolean; remote?: boolean; mode?: string };
   if (epoch !== accountEpoch) return;
   const mode = status.mode ?? 'browser';
   updateProverModeLabel(mode);
 
   // Populate account selector from background (fresh derivation)
-  const accRes = await sendMsg('GET_ACCOUNTS') as { accounts?: Array<{ name: string; hdIndex: number; address: string }>; activeHdIndex?: number; error?: string };
+  const accRes = await sendMsg(MSG_GET_ACCOUNTS) as { accounts?: Array<{ name: string; hdIndex: number; address: string }>; activeHdIndex?: number; error?: string };
   if (epoch !== accountEpoch) return;
   const select = document.getElementById('account-select') as HTMLSelectElement;
   if (accRes.accounts) {
@@ -626,7 +517,7 @@ async function loadMainScreen() {
     }).join('');
   }
 
-  const addrRes = await sendMsg('GET_ADDRESS') as { address?: string; error?: string };
+  const addrRes = await sendMsg(MSG_GET_ADDRESS) as { address?: string; error?: string };
   if (epoch !== accountEpoch) return;
   if (addrRes.error) { showToast('Incorrect password'); showScreen(screenUnlock); return; }
   const fullAddr = addrRes.address!;
@@ -638,9 +529,8 @@ async function loadMainScreen() {
   const cachedBal = await getCachedBalance(fullAddr);
   updateGetOctButton(cachedBal);
 
-  // Initial data load — fetch public balance + tokens immediately, private balance async
+  // Initial data load — fetch public balance immediately, private balance async
   await refreshPublicBalance();
-  await refreshTokens();
   await loadActivity();
 
   // Check stealth readiness (public key registered on-chain)
@@ -653,7 +543,7 @@ async function loadMainScreen() {
 async function updateStealthBadge() {
   const epoch = accountEpoch;
   const badge = document.getElementById('stealth-badge')!;
-  const res = await sendMsg('CHECK_STEALTH_READY') as { ready?: boolean; reason?: string };
+  const res = await sendMsg(MSG_CHECK_STEALTH_READY) as { ready?: boolean; reason?: string };
   if (epoch !== accountEpoch) return; // stale
   if (res.ready) {
     badge.innerHTML = '<svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>';
@@ -680,146 +570,146 @@ async function loadActivity() {
   activityLoading = true;
   const epoch = accountEpoch;
   try {
-  const actList = document.getElementById('activity-list')!;
-  const pendingEl = document.getElementById('activity-pending')!;
+    const actList = document.getElementById('activity-list')!;
+    const pendingEl = document.getElementById('activity-pending')!;
 
-  // Show running jobs at top (separate element, no flicker on main list)
-  const { activeUnshieldJob, activeUnshieldStart, activeShieldJob, activeShieldStart, activeStealthJob, activeStealthStart, activeClaimJob, activeClaimStart } =
-    await chrome.storage.local.get(['activeUnshieldJob', 'activeUnshieldStart', 'activeShieldJob', 'activeShieldStart', 'activeStealthJob', 'activeStealthStart', 'activeClaimJob', 'activeClaimStart']);
+    // Show running jobs at top (separate element, no flicker on main list)
+    const { activeUnshieldJob, activeUnshieldStart, activeShieldJob, activeShieldStart, activeStealthJob, activeStealthStart, activeClaimJob, activeClaimStart } =
+      await chrome.storage.local.get(['activeUnshieldJob', 'activeUnshieldStart', 'activeShieldJob', 'activeShieldStart', 'activeStealthJob', 'activeStealthStart', 'activeClaimJob', 'activeClaimStart']);
 
-  const activeJobId = activeUnshieldJob || activeShieldJob || activeStealthJob || activeClaimJob;
-  const activeStart = activeUnshieldJob ? activeUnshieldStart : activeShieldJob ? activeShieldStart : activeClaimJob ? activeClaimStart : activeStealthStart;
-  const activeLabel = activeUnshieldJob ? 'Unshielding' : activeStealthJob ? 'Stealth Send' : activeClaimJob ? 'Claiming' : 'Shielding';
-  const activeTypeClass = activeUnshieldJob ? 'unshield' : activeStealthJob ? 'stealth' : activeClaimJob ? 'claim' : 'shield';
+    const activeJobId = activeUnshieldJob || activeShieldJob || activeStealthJob || activeClaimJob;
+    const activeStart = activeUnshieldJob ? activeUnshieldStart : activeShieldJob ? activeShieldStart : activeClaimJob ? activeClaimStart : activeStealthStart;
+    const activeLabel = activeUnshieldJob ? 'Unshielding' : activeStealthJob ? 'Stealth Send' : activeClaimJob ? 'Claiming' : 'Shielding';
+    const activeTypeClass = activeUnshieldJob ? 'unshield' : activeStealthJob ? 'stealth' : activeClaimJob ? 'claim' : 'shield';
 
-  if (activeJobId) {
-    const isPlaceholder = activeJobId.startsWith('claim_pending_');
-    const job = isPlaceholder
-      ? { status: 'running', step: 'Starting claim...' }
-      : await sendMsg('GET_JOB_STATUS', { jobId: activeJobId }) as { status: string; step?: string };
-    if (job.status === 'running' || job.status === 'pending_unlock' || job.status === 'crypto_done') {
-      const elapsed = activeStart ? Math.floor((Date.now() - activeStart) / 1000) : 0;
-      const timeStr = elapsed < 60 ? `${elapsed}s ago` : `${Math.floor(elapsed / 60)}m ${elapsed % 60}s ago`;
-      pendingEl.innerHTML = `<div class="activity-item pending">
+    if (activeJobId) {
+      const isPlaceholder = activeJobId.startsWith('claim_pending_');
+      const job = isPlaceholder
+        ? { status: 'running', step: 'Starting claim...' }
+        : await sendMsg(MSG_GET_JOB_STATUS, { jobId: activeJobId }) as { status: string; step?: string };
+      if (job.status === 'running' || job.status === 'pending_unlock' || job.status === 'crypto_done') {
+        const elapsed = activeStart ? Math.floor((Date.now() - activeStart) / 1000) : 0;
+        const timeStr = elapsed < 60 ? `${elapsed}s ago` : `${Math.floor(elapsed / 60)}m ${elapsed % 60}s ago`;
+        pendingEl.innerHTML = `<div class="activity-item pending">
         <div class="activity-row"><span class="activity-type ${activeTypeClass}">${activeLabel}</span><span class="activity-amount">In Progress</span></div>
         <div class="activity-row"><span class="activity-addr">${escapeHtml(job.step ?? 'working...')}</span><span class="activity-time">${timeStr}</span></div>
         <div class="activity-row"><button class="cancel-unshield" data-job="${escapeHtml(activeJobId)}">Cancel</button></div>
       </div>`;
-      pendingEl.querySelector('.cancel-unshield')?.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        const jobId = (e.target as HTMLElement).dataset.job!;
-        await sendMsg('CANCEL_JOB', { jobId });
-        await chrome.storage.local.remove(['activeUnshieldJob', 'activeUnshieldStart', 'activeShieldJob', 'activeShieldStart', 'activeStealthJob', 'activeStealthStart', 'activeClaimJob', 'activeClaimStart']);
+        pendingEl.querySelector('.cancel-unshield')?.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          const jobId = (e.target as HTMLElement).dataset.job!;
+          await sendMsg(MSG_CANCEL_JOB, { jobId });
+          await chrome.storage.local.remove(['activeUnshieldJob', 'activeUnshieldStart', 'activeShieldJob', 'activeShieldStart', 'activeStealthJob', 'activeStealthStart', 'activeClaimJob', 'activeClaimStart']);
+          pendingEl.innerHTML = '';
+          if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+          showActionToast(`${activeLabel} cancelled`, { duration: 3000 });
+        });
+      } else {
         pendingEl.innerHTML = '';
-        if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
-        showActionToast(`${activeLabel} cancelled`, { duration: 3000 });
-      });
+      }
     } else {
       pendingEl.innerHTML = '';
     }
-  } else {
-    pendingEl.innerHTML = '';
-  }
 
-  const myAddr = document.getElementById('display-address')!.getAttribute('data-full') ?? '';
-  const res = await sendMsg('GET_ACTIVITY') as { transactions?: Array<Record<string, unknown>>; error?: string };
-  if (epoch !== accountEpoch) return; // stale
+    const myAddr = document.getElementById('display-address')!.getAttribute('data-full') ?? '';
+    const res = await sendMsg(MSG_GET_ACTIVITY) as { transactions?: Array<Record<string, unknown>>; error?: string };
+    if (epoch !== accountEpoch) return; // stale
 
-  // Merge new results into cache (add-only); on error, keep existing cache
-  if (!res.error && res.transactions && res.transactions.length > 0) {
-    for (const tx of res.transactions) {
-      const hash = String(tx.tx_hash ?? '');
-      if (!hash) continue;
-      const existing = activityCache.get(hash);
-      // Preserve locally-known amount for claim/stealth (on-chain amount is always 0)
-      if (existing && existing.amount_raw && Number(tx.amount_raw ?? tx.amount ?? 0) === 0) {
-        const opType = String(tx.op_type ?? '');
-        if (opType === 'claim' || opType === 'stealth') {
-          tx.amount_raw = existing.amount_raw;
+    // Merge new results into cache (add-only); on error, keep existing cache
+    if (!res.error && res.transactions && res.transactions.length > 0) {
+      for (const tx of res.transactions) {
+        const hash = String(tx.tx_hash ?? '');
+        if (!hash) continue;
+        const existing = activityCache.get(hash);
+        // Preserve locally-known amount for claim/stealth (on-chain amount is always 0)
+        if (existing && existing.amount_raw && Number(tx.amount_raw ?? tx.amount ?? 0) === 0) {
+          const opType = String(tx.op_type ?? '');
+          if (opType === 'claim' || opType === 'stealth') {
+            tx.amount_raw = existing.amount_raw;
+          }
         }
+        activityCache.set(hash, tx);
       }
-      activityCache.set(hash, tx);
-    }
-  }
-
-  // Render from cache
-  if (activityCache.size === 0) {
-    const emptyHtml = '<p class="muted">No recent activity</p>';
-    if (lastActivityHtml !== emptyHtml) {
-      actList.innerHTML = emptyHtml;
-      lastActivityHtml = emptyHtml;
-    }
-    return;
-  }
-
-  // Sort by timestamp descending
-  const sorted = [...activityCache.values()].sort((a, b) => Number(b.timestamp ?? 0) - Number(a.timestamp ?? 0));
-
-  const newHtml = sorted.map(tx => {
-    const from = String(tx.from ?? '');
-    const to = String(tx.to ?? tx.to_ ?? '');
-    const amountRaw = Number(tx.amount_raw ?? tx.amount ?? 0);
-    const amount = (amountRaw / 1000000).toFixed(6).replace(/\.?0+$/, '');
-    const opType = String(tx.op_type ?? 'standard');
-    const hash = String(tx.tx_hash ?? '');
-    const ts = Number(tx.timestamp ?? 0);
-    const time = ts ? new Date(ts * 1000).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
-    const isPending = Boolean(tx._pending);
-
-    let typeLabel: string;
-    let typeClass: string;
-    let counterparty: string;
-    if (opType === 'encrypt') {
-      typeLabel = 'Shield';
-      typeClass = 'shield';
-      counterparty = to;
-    } else if (opType === 'decrypt') {
-      typeLabel = 'Unshield';
-      typeClass = 'unshield';
-      counterparty = to;
-    } else if (opType === 'stealth') {
-      typeLabel = 'Stealth Send';
-      typeClass = 'stealth';
-      counterparty = to;
-    } else if (opType === 'claim') {
-      typeLabel = 'Stealth Claim';
-      typeClass = 'claim';
-      counterparty = from;
-    } else if (opType === 'call') {
-      typeLabel = 'Contract Call';
-      typeClass = 'call';
-      counterparty = to;
-    } else if (from === myAddr) {
-      typeLabel = 'Sent';
-      typeClass = 'send';
-      counterparty = to;
-    } else {
-      typeLabel = 'Received';
-      typeClass = 'receive';
-      counterparty = from;
     }
 
-    const amountDisplay = amountRaw > 0 ? amount + ' OCT' : '';
-    const pendingBadge = isPending ? ' <span class="activity-pending-badge">Confirming</span>' : '';
-    return `<div class="activity-item${isPending ? ' confirming' : ''}" data-hash="${escapeHtml(hash)}" title="View on OctraScan">
+    // Render from cache
+    if (activityCache.size === 0) {
+      const emptyHtml = '<p class="muted">No recent activity</p>';
+      if (lastActivityHtml !== emptyHtml) {
+        actList.innerHTML = emptyHtml;
+        lastActivityHtml = emptyHtml;
+      }
+      return;
+    }
+
+    // Sort by timestamp descending
+    const sorted = [...activityCache.values()].sort((a, b) => Number(b.timestamp ?? 0) - Number(a.timestamp ?? 0));
+
+    const newHtml = sorted.map(tx => {
+      const from = String(tx.from ?? '');
+      const to = String(tx.to ?? tx.to_ ?? '');
+      const amountRaw = Number(tx.amount_raw ?? tx.amount ?? 0);
+      const amount = (amountRaw / 1000000).toFixed(6).replace(/\.?0+$/, '');
+      const opType = String(tx.op_type ?? 'standard');
+      const hash = String(tx.tx_hash ?? '');
+      const ts = Number(tx.timestamp ?? 0);
+      const time = ts ? new Date(ts * 1000).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+      const isPending = Boolean(tx._pending);
+
+      let typeLabel: string;
+      let typeClass: string;
+      let counterparty: string;
+      if (opType === 'encrypt') {
+        typeLabel = 'Shield';
+        typeClass = 'shield';
+        counterparty = to;
+      } else if (opType === 'decrypt') {
+        typeLabel = 'Unshield';
+        typeClass = 'unshield';
+        counterparty = to;
+      } else if (opType === 'stealth') {
+        typeLabel = 'Stealth Send';
+        typeClass = 'stealth';
+        counterparty = to;
+      } else if (opType === 'claim') {
+        typeLabel = 'Stealth Claim';
+        typeClass = 'claim';
+        counterparty = from;
+      } else if (opType === 'call') {
+        typeLabel = 'Contract Call';
+        typeClass = 'call';
+        counterparty = to;
+      } else if (from === myAddr) {
+        typeLabel = 'Sent';
+        typeClass = 'send';
+        counterparty = to;
+      } else {
+        typeLabel = 'Received';
+        typeClass = 'receive';
+        counterparty = from;
+      }
+
+      const amountDisplay = amountRaw > 0 ? amount + ' OCT' : '';
+      const pendingBadge = isPending ? ' <span class="activity-pending-badge">Confirming</span>' : '';
+      return `<div class="activity-item${isPending ? ' confirming' : ''}" data-hash="${escapeHtml(hash)}" title="View on OctraScan">
       <div class="activity-row"><span class="activity-type ${typeClass}">${typeLabel}${pendingBadge}</span><span class="activity-amount">${amountDisplay}</span></div>
       <div class="activity-row"><span class="activity-addr">${isPending ? 'Waiting for confirmation...' : escapeHtml(counterparty)}</span><span class="activity-time">${time}</span></div>
     </div>`;
-  }).join('');
+    }).join('');
 
-  // Only update DOM if content actually changed
-  if (newHtml !== lastActivityHtml) {
-    actList.innerHTML = newHtml;
-    lastActivityHtml = newHtml;
+    // Only update DOM if content actually changed
+    if (newHtml !== lastActivityHtml) {
+      actList.innerHTML = newHtml;
+      lastActivityHtml = newHtml;
 
-    // Click to open on explorer
-    actList.querySelectorAll('.activity-item').forEach(el => {
-      el.addEventListener('click', () => {
-        const hash = (el as HTMLElement).dataset.hash;
-        if (hash) window.open(txUrl(hash), '_blank');
+      // Click to open on explorer
+      actList.querySelectorAll('.activity-item').forEach(el => {
+        el.addEventListener('click', () => {
+          const hash = (el as HTMLElement).dataset.hash;
+          if (hash) window.open(txUrl(hash), '_blank');
+        });
       });
-    });
-  }
+    }
   } finally { activityLoading = false; }
 }
 
@@ -833,7 +723,7 @@ document.getElementById('account-select')!.addEventListener('change', async (e) 
   const account = state.accounts[idx];
   accountEpoch++; // invalidate in-flight requests from previous account
   PollingService.stop();
-  await sendMsg('SWITCH_ACCOUNT', { hdIndex: account.hdIndex });
+  await sendMsg(MSG_SWITCH_ACCOUNT, { hdIndex: account.hdIndex });
 
   // Reset displayed balance, activity, stealth badge, and input fields immediately
   document.getElementById('stealth-badge')!.classList.add('hidden');
@@ -868,15 +758,15 @@ document.getElementById('btn-add-account')!.addEventListener('click', async () =
   pvacOverlay.classList.remove('hidden');
   const nextHdIndex = Math.max(...state.accounts.map(a => a.hdIndex)) + 1;
   const name = `Account ${state.accounts.length + 1}`;
-  const res = await sendMsg('ADD_ACCOUNT', { name, hdIndex: nextHdIndex }) as { address?: string; error?: string };
+  const res = await sendMsg(MSG_ADD_ACCOUNT, { name, hdIndex: nextHdIndex }) as { address?: string; error?: string };
   if (res.error) { pvacOverlay.classList.add('hidden'); showToast(res.error); return; }
   state.accounts.push({ name, hdIndex: nextHdIndex, address: res.address! });
   state.activeIndex = state.accounts.length - 1;
   await saveWallet(state);
   accountEpoch++; // invalidate in-flight requests from previous account
   PollingService.stop();
-  await sendMsg('SWITCH_ACCOUNT', { hdIndex: nextHdIndex });
-  await sendMsg('DERIVE_PVAC_KEYS');
+  await sendMsg(MSG_SWITCH_ACCOUNT, { hdIndex: nextHdIndex });
+  await sendMsg(MSG_DERIVE_PVAC_KEYS);
   pvacOverlay.classList.add('hidden');
   await loadMainScreen();
   showToast(`${name} created`);
@@ -895,7 +785,7 @@ function getAddressSuggestions(): Array<{ label: string; address: string }> {
 }
 
 sendToInput.addEventListener('focus', async () => {
-  const res = await sendMsg('GET_ACCOUNTS') as { accounts?: Array<{ name: string; hdIndex: number; address: string }> };
+  const res = await sendMsg(MSG_GET_ACCOUNTS) as { accounts?: Array<{ name: string; hdIndex: number; address: string }> };
   cachedAccounts = res.accounts ?? [];
   showSuggestions('');
 });
@@ -985,7 +875,7 @@ submitSendBtn.addEventListener('click', async () => {
   if (!to || !amount) { showToast('Fill in all fields'); return; }
 
   if (sendMode === 'stealth') {
-    const res = await sendMsg('STEALTH_SEND', { to, amount }) as { jobId?: string; error?: string };
+    const res = await sendMsg(MSG_STEALTH_SEND, { to, amount }) as { jobId?: string; error?: string };
     if (res.error) {
       const msg = res.error === 'recipient_no_pvac'
         ? 'Recipient must have funds to receive stealth sends'
@@ -1001,7 +891,7 @@ submitSendBtn.addEventListener('click', async () => {
     }
   } else {
     showActionToast('Transfer started', { action: 'View', goActivity: true });
-    const res = await sendMsg('SEND_TRANSACTION', { to, amount }) as { hash?: string; error?: string };
+    const res = await sendMsg(MSG_SEND_TRANSACTION, { to, amount }) as { hash?: string; error?: string };
     if (res.error) {
       showActionToast(`Error: ${res.error}`, { duration: 4000 });
     } else {
@@ -1036,7 +926,7 @@ submitShieldBtn.addEventListener('click', async () => {
   if (!amount) { showToast('Enter an amount'); return; }
   if (shieldDirection === 'shield') {
     showActionToast('Shield started', { action: 'View', goActivity: true });
-    const res = await sendMsg('ENCRYPT_BALANCE', { amount }) as { jobId?: string; error?: string };
+    const res = await sendMsg(MSG_ENCRYPT_BALANCE, { amount }) as { jobId?: string; error?: string };
     if (res.error) {
       showActionToast(`Error: ${res.error}`, { duration: 4000 });
     } else if (res.jobId) {
@@ -1047,7 +937,7 @@ submitShieldBtn.addEventListener('click', async () => {
     }
   } else {
     showActionToast('Unshield started', { action: 'View', goActivity: true });
-    const res = await sendMsg('DECRYPT_BALANCE', { amount }) as { jobId?: string; error?: string };
+    const res = await sendMsg(MSG_DECRYPT_BALANCE, { amount }) as { jobId?: string; error?: string };
     if (res.error) {
       showActionToast(`Error: ${res.error}`, { duration: 4000 });
     } else if (res.jobId) {
@@ -1073,18 +963,18 @@ function pollJobStatus(jobId: string, jobType: 'shield' | 'unshield' | 'stealth'
   const storageKeys = jobType === 'shield'
     ? ['activeShieldJob', 'activeShieldStart', 'activeShieldAmount']
     : jobType === 'stealth'
-    ? ['activeStealthJob', 'activeStealthStart', 'activeStealthAmount']
-    : jobType === 'claim'
-    ? ['activeClaimJob', 'activeClaimStart', 'activeClaimAmount']
-    : ['activeUnshieldJob', 'activeUnshieldStart', 'activeUnshieldAmount'];
+      ? ['activeStealthJob', 'activeStealthStart', 'activeStealthAmount']
+      : jobType === 'claim'
+        ? ['activeClaimJob', 'activeClaimStart', 'activeClaimAmount']
+        : ['activeUnshieldJob', 'activeUnshieldStart', 'activeUnshieldAmount'];
   const amountKey = jobType === 'shield' ? 'activeShieldAmount'
     : jobType === 'stealth' ? 'activeStealthAmount'
-    : jobType === 'claim' ? 'activeClaimAmount'
-    : 'activeUnshieldAmount';
+      : jobType === 'claim' ? 'activeClaimAmount'
+        : 'activeUnshieldAmount';
 
   if (pollTimer) clearInterval(pollTimer);
   pollTimer = setInterval(async () => {
-    const res = await sendMsg('GET_JOB_STATUS', { jobId }) as { status: string; step?: string; prover?: string; hash?: string; error?: string };
+    const res = await sendMsg(MSG_GET_JOB_STATUS, { jobId }) as { status: string; step?: string; prover?: string; hash?: string; error?: string };
     if (res.status === 'running' || res.status === 'pending_unlock' || res.status === 'crypto_done') {
       // silently polling — toast already shown at start
     } else if (res.status === 'done') {
@@ -1164,17 +1054,17 @@ const DEVNET_RPC = 'https://devnet.octrascan.io/rpc';
 const MAIN_RPC = 'https://octra.network/rpc';
 
 (async () => {
-  const res = await sendMsg('GET_RPC_URL') as { rpcUrl?: string };
+  const res = await sendMsg(MSG_GET_RPC_URL) as { rpcUrl?: string };
   networkLabel.textContent = res.rpcUrl === DEVNET_RPC ? 'devnet' : 'mainnet';
   networkLabel.style.color = res.rpcUrl === DEVNET_RPC ? '#f59e0b' : '';
   setExplorerFromRpc(res.rpcUrl ?? MAIN_RPC);
 })();
 
 document.getElementById('btn-network')!.addEventListener('click', async () => {
-  const res = await sendMsg('GET_RPC_URL') as { rpcUrl?: string };
+  const res = await sendMsg(MSG_GET_RPC_URL) as { rpcUrl?: string };
   const isDevnet = res.rpcUrl === DEVNET_RPC;
   const newUrl = isDevnet ? MAIN_RPC : DEVNET_RPC;
-  await sendMsg('SET_RPC_URL', { url: newUrl });
+  await sendMsg(MSG_SET_RPC_URL, { url: newUrl });
   setExplorerFromRpc(newUrl);
   networkLabel.textContent = isDevnet ? 'mainnet' : 'devnet';
   networkLabel.style.color = isDevnet ? '' : '#f59e0b';
@@ -1182,7 +1072,7 @@ document.getElementById('btn-network')!.addEventListener('click', async () => {
 });
 
 async function refreshProverStatus() {
-  const res = await sendMsg('GET_PROVER_STATUS') as { local?: boolean; remote?: boolean; mode?: string };
+  const res = await sendMsg(MSG_GET_PROVER_STATUS) as { local?: boolean; remote?: boolean; mode?: string };
   const localInd = document.getElementById('prover-local-indicator')!;
   const remoteInd = document.getElementById('prover-remote-indicator')!;
   localInd.className = `prover-indicator ${res.local ? 'online' : 'offline'}`;
@@ -1216,7 +1106,7 @@ function updateProverModeLabel(mode: string) {
 proverModal.querySelectorAll('input[name="prover-mode"]').forEach((radio) => {
   radio.addEventListener('change', async (e) => {
     const mode = (e.target as HTMLInputElement).value;
-    await sendMsg('SET_PROVER_MODE', { mode });
+    await sendMsg(MSG_SET_PROVER_MODE, { mode });
     updateProverModeLabel(mode);
   });
 });
@@ -1225,7 +1115,7 @@ document.getElementById('prover-file-input')!.addEventListener('change', async (
   const file = (e.target as HTMLInputElement).files?.[0];
   if (!file) return;
   const text = await file.text();
-  const res = await sendMsg('IMPORT_PAIRING', { fileContent: text }) as { ok?: boolean; error?: string };
+  const res = await sendMsg(MSG_IMPORT_PAIRING, { fileContent: text }) as { ok?: boolean; error?: string };
   if (res.ok) {
     showToast('Pairing imported!');
     refreshProverStatus();
@@ -1236,7 +1126,7 @@ document.getElementById('prover-file-input')!.addEventListener('change', async (
 });
 
 document.getElementById('btn-remove-pairing')!.addEventListener('click', async () => {
-  await sendMsg('REMOVE_PAIRING');
+  await sendMsg(MSG_REMOVE_PAIRING);
   showToast('Pairing removed');
   refreshProverStatus();
 });

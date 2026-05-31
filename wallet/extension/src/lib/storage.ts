@@ -17,13 +17,6 @@ interface StoredState {
   activeIndex: number; // which account is active (index into accounts[])
 }
 
-// Legacy format migration
-interface LegacyState {
-  encryptedSeed: string;
-  address: string;
-  publicKeyB64: string;
-}
-
 async function deriveKey(password: string, salt: Uint8Array): Promise<CryptoKey> {
   const enc = new TextEncoder();
   const keyMaterial = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveKey']);
@@ -68,17 +61,6 @@ export async function loadWallet(): Promise<StoredState | null> {
   const data = await chrome.storage.local.get(STORAGE_KEY);
   const raw = data[STORAGE_KEY];
   if (!raw) return null;
-  // Migrate legacy format
-  if ('address' in raw && !('accounts' in raw)) {
-    const legacy = raw as LegacyState;
-    const migrated: StoredState = {
-      encryptedSeed: legacy.encryptedSeed,
-      accounts: [{ name: 'Account 1', hdIndex: 0, address: legacy.address }],
-      activeIndex: 0,
-    };
-    await saveWallet(migrated);
-    return migrated;
-  }
   return raw as StoredState;
 }
 
