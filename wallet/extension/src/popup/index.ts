@@ -89,6 +89,7 @@ function showStealthClaimToast(outputs: Array<Record<string, unknown>>) {
           const claimAmount = res.amount ?? '';
           await chrome.storage.local.set({ activeClaimJob: res.jobId, activeClaimStart: Date.now(), activeClaimAmount: claimAmount });
           pollJobStatus(res.jobId, 'claim');
+          activityLoading = false;
           loadActivity();
         } else if (res.error) {
           await chrome.storage.local.remove(['activeClaimJob', 'activeClaimStart', 'activeClaimAmount']);
@@ -456,18 +457,19 @@ async function refreshPrivateBalance() {
 
 
 async function scanForStealthPayments() {
-  // Don't show claim toast while a claim is already in progress
   const { activeClaimJob } = await chrome.storage.local.get('activeClaimJob');
   if (activeClaimJob) return;
 
   const epoch = accountEpoch;
   try {
     const res = await sendMsg(MSG_STEALTH_SCAN, {}) as { outputs?: Array<Record<string, unknown>>; error?: string };
-    if (epoch !== accountEpoch) return; // stale
+    if (epoch !== accountEpoch) return;
+    if (res.error) { console.warn('[stealth-scan] error: %s', res.error); return; }
     if (res.outputs && res.outputs.length > 0) {
+      console.log('[stealth-scan] found %d claimable output(s)', res.outputs.length);
       showStealthClaimToast(res.outputs);
     }
-  } catch { /* silent */ }
+  } catch (e) { console.warn('[stealth-scan] exception: %s', (e as Error).message); }
 }
 
 const PollingService = {
@@ -580,8 +582,8 @@ async function loadActivity() {
 
     const activeJobId = activeUnshieldJob || activeShieldJob || activeStealthJob || activeClaimJob;
     const activeStart = activeUnshieldJob ? activeUnshieldStart : activeShieldJob ? activeShieldStart : activeClaimJob ? activeClaimStart : activeStealthStart;
-    const activeLabel = activeUnshieldJob ? 'Unshielding' : activeStealthJob ? 'Stealth Send' : activeClaimJob ? 'Claiming' : 'Shielding';
-    const activeTypeClass = activeUnshieldJob ? 'unshield' : activeStealthJob ? 'stealth' : activeClaimJob ? 'claim' : 'shield';
+    const activeLabel = activeUnshieldJob ? 'Unshielding' : activeShieldJob ? 'Shielding' : activeStealthJob ? 'Stealth Send' : activeClaimJob ? 'Claiming' : '';
+    const activeTypeClass = activeUnshieldJob ? 'unshield' : activeShieldJob ? 'shield' : activeStealthJob ? 'stealth' : activeClaimJob ? 'claim' : '';
 
     if (activeJobId) {
       const isPlaceholder = activeJobId.startsWith('claim_pending_');
@@ -732,9 +734,11 @@ document.getElementById('account-select')!.addEventListener('change', async (e) 
   document.getElementById('display-public-balance')!.textContent = '0.00';
   (document.getElementById('send-amount') as HTMLInputElement).value = '';
   (document.getElementById('send-to') as HTMLInputElement).value = '';
-  (document.getElementById('shield-amount') as HTMLInputElement).value = '';
-  submitSendBtn.disabled = true;
+  shieldAmountInput.value = '';
+  unshieldAmountIdx = 0;
+  unshieldAmountInput.value = formatUnshieldAmount(UNSHIELD_AMOUNTS[0]);
   submitShieldBtn.disabled = true;
+  submitSendBtn.disabled = true;
   const privEl = document.getElementById('display-private-balance')!;
   privEl.textContent = '···';
   privEl.classList.add('shimmer');
@@ -831,27 +835,6 @@ const submitShieldBtn = document.getElementById('btn-submit-shield') as HTMLButt
 // Send mode toggle (Public / Stealth)
 const sendModeToggle = document.getElementById('send-mode-toggle') as HTMLElement;
 const sendAmountInput = document.getElementById('send-amount') as HTMLInputElement;
-const sendAmountStealth = document.getElementById('send-amount-stealth') as HTMLInputElement;
-const stealthAmountWrap = document.getElementById('send-amount-stealth-wrap') as HTMLElement;
-const STEALTH_AMOUNTS = [1, 10, 100, 1000, 10000, 100000, 1000000];
-let stealthAmountIdx = 0;
-function formatStealthAmount(n: number): string { return n.toLocaleString(); }
-sendAmountStealth.value = formatStealthAmount(STEALTH_AMOUNTS[stealthAmountIdx]);
-
-document.getElementById('stealth-amount-up')!.addEventListener('click', () => {
-  if (stealthAmountIdx < STEALTH_AMOUNTS.length - 1) {
-    stealthAmountIdx++;
-    sendAmountStealth.value = formatStealthAmount(STEALTH_AMOUNTS[stealthAmountIdx]);
-    updateSendState();
-  }
-});
-document.getElementById('stealth-amount-down')!.addEventListener('click', () => {
-  if (stealthAmountIdx > 0) {
-    stealthAmountIdx--;
-    sendAmountStealth.value = formatStealthAmount(STEALTH_AMOUNTS[stealthAmountIdx]);
-    updateSendState();
-  }
-});
 
 document.querySelectorAll('#send-mode-toggle .shield-dir').forEach(btn => {
   btn.addEventListener('click', () => {
@@ -861,31 +844,45 @@ document.querySelectorAll('#send-mode-toggle .shield-dir').forEach(btn => {
     btn.classList.add('active');
     sendModeToggle.classList.toggle('unshield', dir === 'stealth');
     submitSendBtn.textContent = sendMode === 'stealth' ? 'Confirm Stealth Send' : 'Confirm Send';
-    // Toggle amount input vs stealth dropdown
-    if (sendMode === 'stealth') {
-      sendAmountInput.classList.add('hidden');
-      stealthAmountWrap.classList.remove('hidden');
-    } else {
-      sendAmountInput.classList.remove('hidden');
-      stealthAmountWrap.classList.add('hidden');
-    }
     updateSendState();
   });
 });
 
 function updateSendState() {
   const to = (document.getElementById('send-to') as HTMLInputElement).value.trim();
-  if (sendMode === 'stealth') {
-    submitSendBtn.disabled = !(sendAmountStealth.value && to);
-  } else {
-    const amount = sendAmountInput.value.trim();
-    submitSendBtn.disabled = !(amount && to);
-  }
+  const amount = sendAmountInput.value.trim();
+  submitSendBtn.disabled = !(amount && to);
 }
 
-function updateShieldState() {
-  const amount = (document.getElementById('shield-amount') as HTMLInputElement).value.trim();
-  submitShieldBtn.disabled = !amount;
+// Shield/Unshield amount inputs
+const shieldAmountInput = document.getElementById('shield-amount') as HTMLInputElement;
+const unshieldAmountWrap = document.getElementById('unshield-amount-wrap') as HTMLElement;
+const UNSHIELD_AMOUNTS = [1, 10, 100, 1000, 10000, 100000, 1000000];
+let unshieldAmountIdx = 0;
+const unshieldAmountInput = document.getElementById('unshield-amount') as HTMLInputElement;
+function formatUnshieldAmount(n: number): string { return n.toLocaleString(); }
+unshieldAmountInput.value = formatUnshieldAmount(UNSHIELD_AMOUNTS[unshieldAmountIdx]);
+
+document.getElementById('unshield-amount-up')!.addEventListener('click', () => {
+  if (unshieldAmountIdx < UNSHIELD_AMOUNTS.length - 1) {
+    unshieldAmountIdx++;
+    unshieldAmountInput.value = formatUnshieldAmount(UNSHIELD_AMOUNTS[unshieldAmountIdx]);
+  }
+});
+document.getElementById('unshield-amount-down')!.addEventListener('click', () => {
+  if (unshieldAmountIdx > 0) {
+    unshieldAmountIdx--;
+    unshieldAmountInput.value = formatUnshieldAmount(UNSHIELD_AMOUNTS[unshieldAmountIdx]);
+  }
+});
+
+// Update shield button disabled state based on mode
+function updateShieldBtnState() {
+  if (shieldDirection === 'shield') {
+    submitShieldBtn.disabled = !shieldAmountInput.value.trim();
+  } else {
+    submitShieldBtn.disabled = false; // stepper always valid
+  }
 }
 
 // Shield direction toggle
@@ -897,19 +894,28 @@ document.querySelectorAll('#shield-mode-toggle .shield-dir').forEach(btn => {
     btn.classList.add('active');
     shieldToggleContainer.classList.toggle('unshield', shieldDirection === 'unshield');
     submitShieldBtn.textContent = shieldDirection === 'shield' ? 'Confirm Shield' : 'Confirm Unshield';
+    // Swap between plain input and stepper
+    if (shieldDirection === 'shield') {
+      shieldAmountInput.classList.remove('hidden');
+      unshieldAmountWrap.classList.add('hidden');
+    } else {
+      shieldAmountInput.classList.add('hidden');
+      unshieldAmountWrap.classList.remove('hidden');
+    }
+    updateShieldBtnState();
   });
 });
+
+shieldAmountInput.addEventListener('input', updateShieldBtnState);
 
 // Validate inputs on typing
 document.getElementById('send-amount')!.addEventListener('input', updateSendState);
 document.getElementById('send-to')!.addEventListener('input', updateSendState);
-sendAmountStealth.addEventListener('input', updateSendState);
-document.getElementById('shield-amount')!.addEventListener('input', updateShieldState);
 
 // Send submit handler
 submitSendBtn.addEventListener('click', async () => {
   const to = (document.getElementById('send-to') as HTMLInputElement).value.trim();
-  const amount = sendMode === 'stealth' ? String(STEALTH_AMOUNTS[stealthAmountIdx]) : sendAmountInput.value.trim();
+  const amount = sendAmountInput.value.trim();
   if (!to || !amount) { showToast('Fill in all fields'); return; }
 
   if (sendMode === 'stealth') {
@@ -922,8 +928,6 @@ submitSendBtn.addEventListener('click', async () => {
     } else if (res.jobId) {
       showActionToast('Private transfer started', { action: 'View', goActivity: true });
       sendAmountInput.value = '';
-      stealthAmountIdx = 0;
-      sendAmountStealth.value = formatStealthAmount(STEALTH_AMOUNTS[0]);
       (document.getElementById('send-to') as HTMLInputElement).value = '';
       submitSendBtn.disabled = true;
       await chrome.storage.local.set({ activeStealthJob: res.jobId, activeStealthStart: Date.now() });
@@ -955,6 +959,7 @@ submitSendBtn.addEventListener('click', async () => {
         });
       }
       showActionToast('Transaction confirmed!', { action: 'View', goActivity: true });
+      activityLoading = false;
       loadActivity();
     }
   }
@@ -962,7 +967,9 @@ submitSendBtn.addEventListener('click', async () => {
 
 // Shield/Unshield submit handler
 submitShieldBtn.addEventListener('click', async () => {
-  const amount = (document.getElementById('shield-amount') as HTMLInputElement).value.trim();
+  const amount = shieldDirection === 'shield'
+    ? shieldAmountInput.value.trim()
+    : String(UNSHIELD_AMOUNTS[unshieldAmountIdx]);
   if (!amount) { showToast('Enter an amount'); return; }
   if (shieldDirection === 'shield') {
     showActionToast('Shield started', { action: 'View', goActivity: true });
@@ -970,8 +977,7 @@ submitShieldBtn.addEventListener('click', async () => {
     if (res.error) {
       showActionToast(`Error: ${res.error}`, { duration: 4000 });
     } else if (res.jobId) {
-      (document.getElementById('shield-amount') as HTMLInputElement).value = '';
-      submitShieldBtn.disabled = true;
+      shieldAmountInput.value = '';
       await chrome.storage.local.set({ activeShieldJob: res.jobId, activeShieldStart: Date.now(), activeShieldAmount: amount });
       pollJobStatus(res.jobId, 'shield');
     }
@@ -981,8 +987,8 @@ submitShieldBtn.addEventListener('click', async () => {
     if (res.error) {
       showActionToast(`Error: ${res.error}`, { duration: 4000 });
     } else if (res.jobId) {
-      (document.getElementById('shield-amount') as HTMLInputElement).value = '';
-      submitShieldBtn.disabled = true;
+      unshieldAmountIdx = 0;
+      unshieldAmountInput.value = formatUnshieldAmount(UNSHIELD_AMOUNTS[0]);
       await chrome.storage.local.set({ activeUnshieldJob: res.jobId, activeUnshieldStart: Date.now(), activeUnshieldAmount: amount });
       pollJobStatus(res.jobId, 'unshield');
     }
@@ -1048,6 +1054,8 @@ function pollJobStatus(jobId: string, jobType: 'shield' | 'unshield' | 'stealth'
       }
       const doneMsg = jobType === 'shield' ? 'Funds shielded!' : jobType === 'claim' ? 'Stealth funds claimed!' : jobType === 'stealth' ? 'Private transfer complete!' : 'Funds unshielded!';
       showActionToast(doneMsg, { action: 'View', goActivity: true });
+      // Force activity refresh even if one is already in-flight
+      activityLoading = false;
       loadActivity();
     } else if (res.status === 'error') {
       clearInterval(pollTimer!);
@@ -1109,6 +1117,10 @@ document.getElementById('btn-network')!.addEventListener('click', async () => {
   networkLabel.textContent = isDevnet ? 'mainnet' : 'devnet';
   networkLabel.style.color = isDevnet ? '' : '#f59e0b';
   showToast(isDevnet ? 'Switched to Mainnet' : 'Switched to Devnet');
+  // Refresh balances and activity for the new network
+  refreshPublicBalance();
+  refreshPrivateBalance();
+  loadActivity();
 });
 
 async function refreshProverStatus() {

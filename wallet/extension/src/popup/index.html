@@ -157,14 +157,6 @@
           <div id="send-to-suggestions" class="suggestions hidden"></div>
         </div>
         <input type="text" id="send-amount" placeholder="Amount (OCT)">
-        <div id="send-amount-stealth-wrap" class="stealth-amount-wrap hidden">
-          <input type="text" id="send-amount-stealth" value="1" readonly>
-          <div class="stealth-amount-arrows">
-            <button class="stealth-arrow up" id="stealth-amount-up">&#9650;</button>
-            <button class="stealth-arrow down" id="stealth-amount-down">&#9660;</button>
-          </div>
-          <span class="stealth-amount-suffix">OCT</span>
-        </div>
         <div class="shield-direction-toggle" id="send-mode-toggle">
           <button class="shield-dir active" id="send-dir-public" data-dir="public">Public</button>
           <span class="shield-dir-divider"></span>
@@ -180,7 +172,15 @@
           <button class="shield-dir" id="shield-dir-unshield" data-dir="unshield">Unshield</button>
         </div>
         <input type="text" id="shield-amount" placeholder="Amount (OCT)">
-        <button id="btn-submit-shield" class="primary" disabled>Confirm Shield</button>
+        <div id="unshield-amount-wrap" class="stealth-amount-wrap hidden">
+          <input type="text" id="unshield-amount" value="1" readonly>
+          <div class="stealth-amount-arrows">
+            <button class="stealth-arrow up" id="unshield-amount-up">&#9650;</button>
+            <button class="stealth-arrow down" id="unshield-amount-down">&#9660;</button>
+          </div>
+          <span class="stealth-amount-suffix">OCT</span>
+        </div>
+        <button id="btn-submit-shield" class="primary">Confirm Shield</button>
         <div id="shield-result" class="result"></div>
       </div>
       <div id="tab-activity" class="tab-content hidden">

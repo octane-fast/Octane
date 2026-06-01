@@ -102,7 +102,9 @@ export function runNativeProver(jobId: string, payload: Record<string, string>):
 
     ws.onopen = async () => {
       const safe = await sanitizeProverPayload(payload);
-      ws.send(JSON.stringify({ ...safe, jobId }));
+      const jsonPayload = JSON.stringify({ ...safe, jobId });
+      console.log('[proofRouter] native prover: connected, sending %s (%dKB)', safe.operation, Math.round(jsonPayload.length / 1024));
+      ws.send(jsonPayload);
     };
 
     ws.onmessage = (ev) => {
@@ -116,12 +118,14 @@ export function runNativeProver(jobId: string, payload: Record<string, string>):
           ws.close();
           resolve(msg.data);
         } else if (msg.type === 'error') {
+          console.warn('[proofRouter] native prover error: %s', msg.error);
           settled = true;
           cleanup();
           ws.close();
           reject(new Error(msg.error ?? 'Prover error'));
         }
       } catch (e) {
+        console.error('[proofRouter] native WS parse error: %s', (e as Error).message);
         settled = true;
         cleanup();
         ws.close();
@@ -137,13 +141,24 @@ export function runNativeProver(jobId: string, payload: Record<string, string>):
       }
     };
 
-    ws.onclose = () => {
+    ws.onclose = (ev) => {
       if (!settled) {
         settled = true;
         cleanup();
-        reject(new Error('Prover disconnected'));
+        console.warn('[proofRouter] native prover disconnected: code=%d reason=%s', ev.code, ev.reason || '(none)');
+        reject(new Error(`Prover disconnected (code=${ev.code})`));
       }
     };
+
+    // Timeout: if no result after 120s, give up (heavy proofs can take a while)
+    setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        cleanup();
+        ws.close();
+        reject(new Error('Native prover timeout (120s)'));
+      }
+    }, 120_000);
   });
 }
 
@@ -242,7 +257,7 @@ export async function route(opts: RouteOpts): Promise<Record<string, unknown> | 
         return await runNativeProver(jobId ?? `${operation}_${Date.now()}`, payload);
       }
     } catch (e) {
-      console.warn(`[proofRouter] native failed (${operation}):`, (e as Error).message);
+      console.warn('[proofRouter] native failed (%s): %s', operation, (e as Error).message);
     }
   }
 

@@ -98,7 +98,7 @@ export function unshieldJob(jobId: string, decAmountRaw: bigint): JobDefinition 
       };
 
       const { skB64, pkB64 } = await vault.requirePvacKeys();
-      const payload = { ...basePayload, pvac_sk_b64: skB64, pvac_pk_b64: pkB64, pvacSkB64: skB64, pvacPkB64: pkB64 };
+      const payload = { ...basePayload, pvac_sk_b64: skB64, pvac_pk_b64: pkB64 };
 
       const result = await routeProof({
         operation: 'unshield',

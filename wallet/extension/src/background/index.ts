@@ -7,11 +7,11 @@ import { toBase64, fromBase64 } from '../lib/crypto';
 import { loadWallet } from '../lib/storage';
 import * as rpc from '../lib/rpc';
 import {
-  isInitialized, initPvacFromKeys, encryptValue, decryptValue,
-  pedersenCommit, makeZeroProofBound, makeRangeProof, ctSub, commitCt,
+  initPvacFromKeys, encryptValue, decryptValue,
+  pedersenCommit, makeZeroProofBound, makeRangeProof,
 } from '../lib/pvac';
 import {
-  prepareStealthSend, checkStealthOutput, decryptStealthAmount, computeClaimSecret, hexEncode,
+  checkStealthOutput, decryptStealthAmount, computeClaimSecret, hexEncode,
 } from '../lib/stealth';
 import { x25519SharedSecret } from '../lib/crypto/stealth';
 import { sha256 } from '@noble/hashes/sha2';
@@ -305,6 +305,9 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
           const { url } = payload as { url: string };
           rpc.setRpcUrl(url);
           await chrome.storage.local.set({ rpcUrl: url });
+          // Clear private balance cache — chain data differs between networks
+          cachedPrivateBalance = null;
+          cachedCipherStr = null;
           sendResponse({ success: true, rpcUrl: url });
           break;
         }
@@ -435,9 +438,7 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
             const ebSig = vault.sign(ebMsg);
             const ebResult = await rpc.getEncryptedBalance(address, toBase64(ebSig), toBase64(vault.getPublicKey())) as Record<string, unknown>;
             const cipherStr = String(ebResult?.cipher ?? '');
-            console.log('[pvac-decrypt] address=%s cipher_len=%d has_pvac=%s', address, cipherStr.length, ebResult?.has_pvac_pubkey);
             if (!cipherStr || cipherStr === '0') {
-              console.log('[pvac-decrypt] no cipher, returning 0');
               cachedPrivateBalance = '0';
               cachedCipherStr = cipherStr;
               sendResponse({ balance: '0' }); break;
@@ -445,10 +446,11 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
 
             // If cipher hasn't changed, return cached decrypted value (skip expensive decrypt)
             if (cipherStr === cachedCipherStr && cachedPrivateBalance !== null) {
-              console.log('[pvac-decrypt] cipher unchanged, returning cached=%s', cachedPrivateBalance);
               sendResponse({ balance: cachedPrivateBalance });
               break;
             }
+
+            console.log('[pvac-decrypt] decrypting balance, cipher_len=%d', cipherStr.length);
 
             // Strip "hfhe_v1|" prefix
             const cipherB64 = cipherStr.startsWith('hfhe_v1|') ? cipherStr.slice(8) : cipherStr;
@@ -456,24 +458,31 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
             // Route decrypt through prover cascade
             const { skB64: pvacSkB64, pkB64: pvacPkB64 } = await vault.requirePvacKeys();
             const decPayload = { operation: 'decrypt', pvac_sk_b64: pvacSkB64, pvac_pk_b64: pvacPkB64, cipher_b64: cipherB64 };
+            const t0 = Date.now();
             const decResult = (await routeProof({
               operation: 'decrypt',
               payload: decPayload,
               native: async () => {
                 const ctrl = new AbortController();
                 const timer = setTimeout(() => ctrl.abort(), 3000);
-                const res = await fetch(`${PROVER_URL}/decrypt`, {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify(decPayload),
-                  signal: ctrl.signal,
-                });
-                clearTimeout(timer);
-                const data = await res.json() as { value?: number; error?: string };
-                if (data.value !== undefined) return { value: data.value };
-                return null;
+                try {
+                  const res = await fetch(`${PROVER_URL}/decrypt`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(decPayload),
+                    signal: ctrl.signal,
+                  });
+                  clearTimeout(timer);
+                  const data = await res.json() as { value?: number; error?: string };
+                  if (data.value !== undefined) return { value: data.value };
+                  return null;
+                } catch (fetchErr) {
+                  clearTimeout(timer);
+                  throw fetchErr;
+                }
               },
               wasm: async () => {
+                console.log('[pvac-decrypt] wasm fallback');
                 await ensureOffscreen();
                 const r = await chrome.runtime.sendMessage({ target: 'offscreen', action: ACTION_DECRYPT, pvacSkB64, pvacPkB64, keyId: vault.getAddress(), cipherB64 }) as { value?: string; error?: string };
                 if (r.error) throw new Error(r.error);
@@ -481,6 +490,7 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
               },
             }))!;
             const rawValue = BigInt(decResult.value as string | number);
+            console.log('[pvac-decrypt] decrypted=%d prover=%s elapsed=%dms', rawValue, decResult.prover ?? '?', Date.now() - t0);
 
             const balStr = formatAmountHuman(rawValue);
             cachedPrivateBalance = balStr;
@@ -994,28 +1004,37 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
             const x25519Sk = vault.deriveX25519Sk();
             const { outputs } = await rpc.getStealthOutputs(lastEpoch);
             const newFound: Array<Record<string, unknown>> = [];
-            let maxEpoch = lastEpoch;
+            // Only advance epoch for outputs we definitively handled (matched ours or confirmed claimed).
+            // Skip-outputs (bad tag, bad eph, errors) stay behind so they get re-scanned.
+            let maxHandledEpoch = lastEpoch;
+
+            let skippedClaimed = 0;
+            let skippedBadTag = 0;
+            let skippedBadEph = 0;
+            let matched = 0;
 
             for (const out of outputs) {
               const epoch = Number(out.epoch_id ?? 0);
-              if (epoch > maxEpoch) maxEpoch = epoch;
 
-              if (Number(out.claimed ?? 0) !== 0) continue;
+              if (Number(out.claimed ?? 0) !== 0) {
+                skippedClaimed++;
+                if (epoch > maxHandledEpoch) maxHandledEpoch = epoch;
+                continue;
+              }
               try {
                 const ephB64 = String(out.eph_pub ?? '');
                 const ephRaw = fromBase64(ephB64);
-                if (ephRaw.length !== 32) continue;
+                if (ephRaw.length !== 32) { skippedBadEph++; continue; }
                 const tagHex = String(out.stealth_tag ?? '');
                 const expectedTag = new Uint8Array(16);
                 for (let i = 0; i < 16; i++)
                   expectedTag[i] = parseInt(tagHex.slice(i*2, i*2+2), 16);
 
                 const shared = await checkStealthOutput(x25519Sk, ephRaw, expectedTag);
-                if (!shared) continue;
+                if (!shared) { skippedBadTag++; continue; }
 
-                const epoch = Number(out.epoch_id ?? 0);
-                if (epoch > maxEpoch) maxEpoch = epoch;
-
+                matched++;
+                if (epoch > maxHandledEpoch) maxHandledEpoch = epoch;
                 newFound.push({
                   id: out.id,
                   epoch,
@@ -1024,17 +1043,18 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
                   eph_pub: ephB64,
                   enc_amount: out.enc_amount ?? '',
                 });
-              } catch { continue; }
+              } catch (e) { console.warn('[stealth-scan] error processing output %s: %s', out.id, (e as Error).message); continue; }
             }
 
             // Merge new discoveries with existing pending (dedup by id)
             const existingIds = new Set(existingPending.map(o => o.id));
             const merged = [...existingPending, ...newFound.filter(o => !existingIds.has(o.id))];
 
-            // Storage is the very last thing — only if scan succeeded
-            // Store maxEpoch + 1 so next scan is strictly after all seen outputs
-            // (RPC returns outputs at sinceEpoch inclusively)
-            const nextEpoch = maxEpoch > lastEpoch ? maxEpoch + 1 : lastEpoch;
+            // Only advance epoch for outputs we handled (matched ours or confirmed claimed).
+            const nextEpoch = maxHandledEpoch > lastEpoch ? maxHandledEpoch + 1 : lastEpoch;
+            if (matched > 0 || nextEpoch !== lastEpoch) {
+              console.log('[stealth-scan] scan=%d matched=%d claimed=%d badTag=%d pending=%d epoch=%d→%d', outputs.length, matched, skippedClaimed, skippedBadTag, merged.length, lastEpoch, nextEpoch);
+            }
             await chrome.storage.local.set({
               [epochKey]: nextEpoch,
               [pendingKey]: merged,
@@ -1044,6 +1064,7 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
           }).then(merged => {
             sendResponse({ outputs: merged });
           }).catch(err => {
+            console.error('[stealth-scan] fatal error: %s', (err as Error).message);
             sendResponse({ error: (err as Error).message });
           });
           break;
