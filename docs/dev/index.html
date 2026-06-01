@@ -4,14 +4,16 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>PVAC Proof Demo — Octra</title>
+  <link rel="icon" type="image/svg+xml" href="/icon.svg">
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0d0d12; color: #e4e4e7; min-height: 100vh; padding: 40px 20px; }
+    body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; background: #0d0d12; color: #e4e4e7; min-height: 100vh; padding: 40px 20px; }
     .container { max-width: 640px; margin: 0 auto; }
-    h1 { font-size: 24px; margin-bottom: 8px; }
+    h1 { font-family: 'Orbitron', sans-serif; font-size: 24px; margin-bottom: 8px; font-weight: 900; letter-spacing: 2px; }
     .subtitle { color: #a1a1aa; font-size: 14px; margin-bottom: 32px; }
     .card { background: #18181b; border: 1px solid #27272a; border-radius: 12px; padding: 20px; margin-bottom: 16px; }
-    .card h2 { font-size: 16px; margin-bottom: 12px; color: #f4f4f5; }
+    .card h2 { font-family: 'Orbitron', sans-serif; font-size: 14px; margin-bottom: 12px; color: #f4f4f5; letter-spacing: 1px; }
     .card p { font-size: 13px; color: #a1a1aa; margin-bottom: 12px; }
     label { display: block; font-size: 12px; color: #a1a1aa; margin-bottom: 4px; }
     input { width: 100%; padding: 8px 12px; border: 1px solid #3f3f46; border-radius: 6px; background: #09090b; color: #e4e4e7; font-size: 14px; margin-bottom: 12px; }
@@ -27,12 +29,42 @@
     .row { display: flex; gap: 8px; align-items: flex-end; }
     .row > * { flex: 1; }
     .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .source-panel { margin-top: 12px; display: none; }
+    .source-panel pre { background: #09090b; border: 1px solid #27272a; border-radius: 8px; padding: 16px; overflow-x: auto; font-size: 12px; font-family: 'SF Mono', monospace; line-height: 1.6; color: #a1a1aa; max-height: 500px; overflow-y: auto; }
+    .copy-bar { display: flex; justify-content: flex-end; margin-bottom: 4px; }
+    .copy-bar button { background: #27272a; color: #a1a1aa; font-size: 11px; padding: 4px 10px; }
+    .copy-bar button:hover { background: #3f3f46; color: #e4e4e7; }
+    nav { display: flex; align-items: center; justify-content: space-between; margin-bottom: 40px; padding-bottom: 16px; border-bottom: 1px solid #1e1e22; }
+    .nav-logo { display: flex; align-items: center; gap: 10px; text-decoration: none; color: inherit; }
+    .nav-logo img { width: 28px; height: 28px; border-radius: 6px; }
+    .nav-logo span { font-family: 'Orbitron', sans-serif; font-weight: 700; font-size: 14px; letter-spacing: 2px; }
+    .nav-links { display: flex; gap: 20px; }
+    .nav-links a { color: #71717a; text-decoration: none; font-size: 13px; font-weight: 500; transition: color 0.2s; }
+    .nav-links a:hover { color: #e4e4e7; }
   </style>
 </head>
 <body>
   <div class="container">
+    <nav>
+      <a class="nav-logo" href="/">
+        <img src="/icon.svg" alt="Octane">
+        <span>OCTANE</span>
+      </a>
+      <div class="nav-links">
+        <a href="/">Home</a>
+        <a href="/docs/">API Docs</a>
+      </div>
+    </nav>
     <h1>PVAC Proof Demo</h1>
-    <p class="subtitle">Generate FHE encryptions, range proofs, and zero-knowledge proofs using the Octra wallet.</p>
+    <p class="subtitle">Generate FHE encryptions, range proofs, and zero-knowledge proofs using the Octane wallet.</p>
+
+    <div style="margin-bottom: 24px;">
+      <button id="btn-source" style="background:#27272a;color:#a1a1aa;">View Source</button>
+      <div id="source-panel" class="source-panel">
+        <div class="copy-bar"><button id="btn-copy-source">Copy to clipboard</button></div>
+        <pre id="source-code"></pre>
+      </div>
+    </div>
 
     <div class="card">
       <h2>Connection</h2>
@@ -170,6 +202,36 @@
         }
       }).catch(() => {});
     }
+
+    // View Source
+    document.getElementById('btn-source').addEventListener('click', async () => {
+      const panel = document.getElementById('source-panel');
+      if (panel.style.display === 'block') {
+        panel.style.display = 'none';
+        document.getElementById('btn-source').textContent = 'View Source';
+        return;
+      }
+      const pre = document.getElementById('source-code');
+      if (!pre.textContent) {
+        try {
+          const res = await fetch(window.location.href);
+          const html = await res.text();
+          pre.textContent = html;
+        } catch (e) {
+          pre.textContent = 'Failed to fetch source: ' + e.message;
+        }
+      }
+      panel.style.display = 'block';
+      document.getElementById('btn-source').textContent = 'Hide Source';
+    });
+
+    document.getElementById('btn-copy-source').addEventListener('click', () => {
+      const text = document.getElementById('source-code').textContent;
+      navigator.clipboard.writeText(text);
+      const btn = document.getElementById('btn-copy-source');
+      btn.textContent = 'Copied!';
+      setTimeout(() => btn.textContent = 'Copy to clipboard', 2000);
+    });
   </script>
 </body>
 </html>

@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <rect width="128" height="128" rx="14" fill="#060d1f"/>
+  <!-- Outer faint ring -->
+  <circle cx="64" cy="64" r="58" fill="none" stroke="rgba(26,86,219,0.15)" stroke-width="0.5"/>
+  <!-- Mid faint ring -->
+  <circle cx="64" cy="64" r="53" fill="none" stroke="rgba(26,86,219,0.3)" stroke-width="0.5"/>
+  <!-- Blue filled circle -->
+  <circle cx="64" cy="64" r="48" fill="#1a56db"/>
+  <!-- Blue ring stroke -->
+  <circle cx="64" cy="64" r="48" fill="none" stroke="#1a56db" stroke-width="1.5"/>
+  <!-- Dark inner circle -->
+  <circle cx="64" cy="64" r="38" fill="#060d1f"/>
+  <!-- Inner glow ring -->
+  <circle cx="64" cy="64" r="34" fill="none" stroke="rgba(96,165,250,0.4)" stroke-width="0.75"/>
+  <!-- Flame - scaled and centered -->
+  <g transform="translate(64,64) scale(0.42) translate(-196,-200)">
+    <path fill="#ffffff" d="M196,268 C170,268 152,248 152,224 C152,204 162,192 170,180 C174,174 176,166 174,156 C180,162 184,170 184,180 C184,170 190,154 200,142 C200,154 206,164 214,170 C220,158 218,146 214,136 C226,148 240,168 240,192 C240,204 236,214 228,222 C224,212 222,200 224,190 C216,202 212,218 214,232 C210,226 208,218 208,210 C204,220 202,240 208,254 C204,260 200,264 196,268 Z"/>
+  </g>
+</svg>
