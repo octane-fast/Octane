@@ -6,7 +6,7 @@ export async function enableTorProxy() {
     mode: 'pac_script' as const,
     pacScript: {
       data: `function FindProxyForURL(url, host) {
-        if (host === "octra.network") {
+        if (host === "octra.network" || host === "octane-relay.octane-fast.workers.dev") {
           return "SOCKS5 127.0.0.1:${TOR_SOCKS_PORT}";
         }
         return "DIRECT";
