@@ -36,8 +36,7 @@ import {
   MSG_RPC_PASSTHROUGH, MSG_STEALTH_SEND, MSG_STEALTH_SCAN,
   MSG_STEALTH_CLAIM, MSG_IMPORT_PAIRING, MSG_REMOVE_PAIRING,
   MSG_GET_PROVER_STATUS, MSG_SET_PROVER_MODE,
-  ACTION_INIT, ACTION_DECRYPT, ACTION_COMPUTE_UNSHIELD,
-  ACTION_CRYPTO_COMPLETE, ACTION_CRYPTO_ERROR,
+  ACTION_INIT, ACTION_DECRYPT,
   ERR_LOCKED,
   SIG_ENCRYPTED_BALANCE,
   ERR_WALLET_LOCKED,
@@ -67,6 +66,8 @@ import {
 import { parseAmountRaw, formatAmountHuman } from '../lib/units';
 import { buildSignedTx } from '../lib/txBuilder';
 import { getDefaultFee, getOperationFee } from '../lib/fees';
+import { runJob } from '../lib/jobRunner';
+import { shieldJob, unshieldJob, stealthSendJob, stealthClaimJob } from './jobs';
 
 // Inject key provider for prover payload sanitization
 setKeyProvider(() => vault.requirePvacKeys());
@@ -87,8 +88,8 @@ if (FEATURE_TOR) {
   });
 }
 
-// Clean up stale jobs and resume in-progress ones on service worker startup
-runJobCleanup(resumeUnshieldSubmission);
+// Clean up stale jobs on service worker startup
+runJobCleanup();
 
 // Purge orphaned approval entries left by previous SW lifetimes
 cleanupOrphanedApprovals();
@@ -274,7 +275,7 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
             ensurePvacRegistered().catch(e => console.warn('[pvac] registration failed:', e.message));
           }).catch((e) => { console.warn('[pvac] key load/derive failed:', e); });
           // Resume any pending_unlock jobs now that wallet is unlocked
-          resumePendingUnlockJobs(resumeUnshieldSubmission);
+          resumePendingUnlockJobs();
           break;
         }
         case MSG_LOCK: {
@@ -517,44 +518,7 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
               break;
             }
 
-            // Route through prover cascade
-            const shieldResult = await routeProof({
-              operation: 'shield',
-              payload: {
-                operation: 'shield',
-                amountRaw: String(amountRaw),
-                seedB64: toBase64(crypto.getRandomValues(new Uint8Array(32))),
-                blindingB64: toBase64(crypto.getRandomValues(new Uint8Array(32))),
-              },
-              jobId,
-              onStatus: (step) => chrome.storage.local.set({ [storageKey]: { status: 'running', step } }),
-              wasm: async () => {
-                const { skB64: sk, pkB64: pk } = await vault.requirePvacKeys();
-                if (!isInitialized()) {
-                  await initPvacFromKeys(fromBase64(sk), fromBase64(pk));
-                }
-                const seed = crypto.getRandomValues(new Uint8Array(32));
-                const blinding = crypto.getRandomValues(new Uint8Array(32));
-                const cipherBytes = encryptValue(amountRaw, seed);
-                const commitBytes = pedersenCommit(amountRaw, blinding);
-                const zpBytes = makeZeroProofBound(cipherBytes, amountRaw, blinding);
-                return {
-                  cipher: 'hfhe_v1|' + toBase64(cipherBytes),
-                  amount_commitment: toBase64(commitBytes),
-                  zero_proof: 'zkzp_v2|' + toBase64(zpBytes),
-                  blinding: toBase64(blinding),
-                };
-              },
-            });
-
-            const encData = JSON.stringify({
-              cipher: shieldResult!.cipher,
-              amount_commitment: shieldResult!.amount_commitment,
-              zero_proof: shieldResult!.zero_proof,
-              blinding: shieldResult!.blinding,
-            });
-            await chrome.storage.local.set({ [storageKey]: { status: 'running', step: 'Submitting transaction...' } });
-            submitEncryptJob(jobId, amountRaw, encData);
+            runJob(shieldJob(jobId, amountRaw));
           } catch (err) {
             sendResponse({ error: (err as Error).message });
           }
@@ -585,7 +549,7 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
           }
 
           // Run the heavy computation in the background
-          runUnshieldJob(jobId, decAmountRaw);
+          runJob(unshieldJob(jobId, decAmountRaw));
           break;
         }
         case MSG_GET_JOB_STATUS: {
@@ -1009,7 +973,7 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
             }
 
             // Run stealth send in background
-            runStealthSendJob(jobId, to, amountRaw);
+            runJob(stealthSendJob(jobId, to, amountRaw));
           } catch (err) {
             sendResponse({ error: (err as Error).message });
           }
@@ -1127,7 +1091,7 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
             }
 
             // Run claim job
-            runStealthClaimJob(jobId, id, claimSecret, decResult.amount, decResult.blinding);
+            runJob(stealthClaimJob(jobId, id, claimSecret, decResult.amount, decResult.blinding));
           } catch (err) {
             sendResponse({ error: (err as Error).message });
           }
@@ -1234,10 +1198,6 @@ chrome.runtime.onConnect.addListener((port) => {
     port.onMessage.addListener(async (msg) => {
       if (msg.type === 'jobStatus' && msg.jobId) {
         await chrome.storage.local.set({ [`job_${msg.jobId}`]: { status: 'running', step: msg.step } });
-      } else if (msg.type === 'cryptoResult' && msg.jobId) {
-        await chrome.storage.local.set({ [`job_${msg.jobId}_crypto`]: msg.data });
-        await chrome.storage.local.set({ [`job_${msg.jobId}`]: { status: 'crypto_done', step: 'Submitting transaction...' } });
-        resumeUnshieldSubmission(msg.jobId);
       } else if (msg.type === 'jobError' && msg.jobId) {
         await chrome.storage.local.set({ [`job_${msg.jobId}`]: { status: 'error', error: msg.error } });
       }
@@ -1246,519 +1206,6 @@ chrome.runtime.onConnect.addListener((port) => {
   }
 });
 
-// Handle cryptoComplete via sendMessage (fallback when port disconnected during computation)
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-  if (msg.target === 'background' && msg.action === ACTION_CRYPTO_COMPLETE && msg.jobId) {
-    chrome.storage.local.set({ [`job_${msg.jobId}_crypto`]: msg.data }).then(() =>
-      chrome.storage.local.set({ [`job_${msg.jobId}`]: { status: 'crypto_done', step: 'Submitting transaction...' } })
-    ).then(() => resumeUnshieldSubmission(msg.jobId));
-    sendResponse({ ok: true });
-  }
-  if (msg.target === 'background' && msg.action === ACTION_CRYPTO_ERROR && msg.jobId) {
-    chrome.storage.local.set({ [`job_${msg.jobId}`]: { status: 'error', error: msg.error } });
-    sendResponse({ ok: true });
-  }
-});
+
 
 let currentJobStorageKey: string | null = null;
-
-// --- Async unshield job (delegated to offscreen document) ---
-async function runUnshieldJob(jobId: string, decAmountRaw: bigint) {
-  const storageKey = `job_${jobId}`;
-  currentJobStorageKey = storageKey;
-  const update = (fields: Record<string, unknown>) =>
-    chrome.storage.local.set({ [storageKey]: { status: 'running', ...fields } });
-
-  try {
-    if (!vault.isUnlocked()) throw new Error('locked');
-    const address = vault.getAddress();
-
-    // Fetch current encrypted balance
-    await update({ step: 'Fetching encrypted balance...' });
-    const ebMsg = new TextEncoder().encode(`${SIG_ENCRYPTED_BALANCE}|${address}`);
-    const ebSig = vault.sign(ebMsg);
-    const ebResult = await rpc.getEncryptedBalance(address, toBase64(ebSig), toBase64(vault.getPublicKey())) as Record<string, unknown>;
-    const currentCipherStr = String(ebResult?.cipher ?? '');
-    if (!currentCipherStr || currentCipherStr === '0') throw new Error('No encrypted balance');
-
-    const currentCipherB64 = currentCipherStr.startsWith('hfhe_v1|') ? currentCipherStr.slice(8) : currentCipherStr;
-
-    // Store job params so we can resume after SW wakes
-    await chrome.storage.local.set({ [`job_${jobId}_params`]: {
-      decAmountRaw: String(decAmountRaw),
-      address,
-    }});
-
-    const seed = crypto.getRandomValues(new Uint8Array(32));
-    const blinding = crypto.getRandomValues(new Uint8Array(32));
-
-    const basePayload = {
-      operation: 'unshield',
-      currentCipherB64,
-      decAmountRaw: String(decAmountRaw),
-      amountRaw: String(decAmountRaw),
-      seedB64: toBase64(seed),
-      blindingB64: toBase64(blinding),
-    };
-
-    // Derive PVAC keys for prover payload
-    const { skB64: pvacSkB64, pkB64: pvacPkB64 } = await vault.requirePvacKeys();
-    const proverPayload = { ...basePayload, pvac_sk_b64: pvacSkB64, pvac_pk_b64: pvacPkB64, pvacSkB64, pvacPkB64 };
-
-    // Try native → remote via routeProof; WASM uses offscreen document (fire-and-forget)
-    const provedResult = await routeProof({
-      operation: 'unshield',
-      payload: proverPayload,
-      jobId,
-      onStatus: (step, prover) => update({ step, prover }),
-    });
-
-    if (provedResult) {
-      await update({ step: 'Submitting transaction...' });
-      await submitUnshieldDirect(jobId, storageKey, provedResult as Record<string, string>, decAmountRaw);
-      return;
-    }
-
-    // Fallback: Spin up offscreen document for heavy crypto (WASM)
-    await update({ step: 'Proving 🌐 In-Browser', prover: 'wasm' });
-    await ensureOffscreen();
-
-    if (!offscreenPort) throw new Error('Offscreen port not connected');
-
-    offscreenPort.postMessage({
-      action: ACTION_COMPUTE_UNSHIELD,
-      jobId,
-      ...proverPayload,
-      keyId: address,
-    });
-
-    // Service worker can now die — offscreen + worker will continue independently
-  } catch (err) {
-    await chrome.storage.local.set({ [storageKey]: { status: 'error', error: (err as Error).message } });
-    currentJobStorageKey = null;
-  }
-}
-
-// --- Async encrypt job submission with indefinite retry ---
-async function submitEncryptJob(
-  jobId: string,
-  amountRaw: bigint,
-  encData: string,
-  attempt = 0,
-) {
-  const storageKey = `job_${jobId}`;
-  try {
-    if (!vault.isUnlocked()) throw new Error('locked');
-    const address = vault.getAddress();
-
-    // Check if cancelled
-    const currentJob = await chrome.storage.local.get(storageKey);
-    if (currentJob[storageKey]?.status === 'cancelled') return;
-
-    // Recover attempt count from storage if starting fresh (service worker restart)
-    if (attempt === 0 && currentJob[storageKey]?.attempt) {
-      attempt = currentJob[storageKey].attempt;
-    }
-
-    await chrome.storage.local.set({ [storageKey]: { status: 'running', step: `Submitting transaction...${attempt > 0 ? ` (retry ${attempt})` : ''}`, attempt } });
-
-    const balInfo = await rpc.getBalance(address);
-    const nonce = balInfo.nonce + 1;
-    const ou = await getOperationFee('encrypt');
-
-    console.log('[octane] submitEncryptJob fee:', ou, 'amount:', String(amountRaw));
-    const tx = buildSignedTx({ from: address, to: address, amount: String(amountRaw), nonce, ou, opType: 'encrypt', encryptedData: encData });
-    console.log('[octane] encrypt tx payload:', JSON.stringify({ from: tx.from, to_: tx.to_, amount: tx.amount, nonce: tx.nonce, ou: tx.ou, op_type: tx.op_type }));
-    const result = await rpc.submitTransaction(tx);
-    completeJob(jobId, result.hash);
-  } catch (err) {
-    // Retry indefinitely on any error — user can cancel
-    const nextAttempt = attempt + 1;
-    const errMsg = (err as Error).message ?? 'unknown error';
-    await chrome.storage.local.set({ [storageKey]: { status: 'running', step: `Submitting transaction... (retry ${nextAttempt} — ${errMsg})`, attempt: nextAttempt } });
-    setTimeout(() => submitEncryptJob(jobId, amountRaw, encData, nextAttempt), SUBMIT_RETRY_DELAY);
-  }
-}
-
-// --- Stealth Send Job ---
-async function runStealthSendJob(jobId: string, to: string, amountRaw: bigint, attempt = 0) {
-  const storageKey = `job_${jobId}`;
-  const update = (fields: Record<string, unknown>) =>
-    chrome.storage.local.set({ [storageKey]: { status: 'running', ...fields } });
-
-  try {
-    // Check if cancelled
-    const currentJob = await chrome.storage.local.get(storageKey);
-    if (currentJob[storageKey]?.status === 'cancelled') return;
-
-    // Recover attempt count from storage if starting fresh (service worker restart)
-    if (attempt === 0 && currentJob[storageKey]?.attempt) {
-      attempt = currentJob[storageKey].attempt;
-    }
-
-    if (!vault.isUnlocked()) throw new Error('locked');
-    const address = vault.getAddress();
-
-    // [1] Get recipient's public key (retries indefinitely on network errors)
-    await update({ step: `Fetching recipient public key...${attempt > 0 ? ` (retry ${attempt})` : ''}`, attempt });
-    const recipientPkResult = await rpc.getPublicKey(to);
-    if (!recipientPkResult.public_key) throw new Error('Recipient has no public key registered — they must make at least one transaction first');
-    const theirSigningPk = fromBase64(recipientPkResult.public_key);
-    if (theirSigningPk.length !== 32) throw new Error('Invalid recipient public key');
-
-    // [2] ECDH key exchange + stealth envelope
-    await update({ step: 'Key exchange...' });
-    const ephSk = crypto.getRandomValues(new Uint8Array(32));
-    ephSk[0] &= 248;
-    ephSk[31] &= 127;
-    ephSk[31] |= 64;
-    const blinding = crypto.getRandomValues(new Uint8Array(32));
-
-    const stealth = await prepareStealthSend(theirSigningPk, ephSk, amountRaw, blinding, to);
-
-    // [3] Check encrypted balance
-    await update({ step: 'Checking encrypted balance...' });
-    const ebMsg = new TextEncoder().encode(`${SIG_ENCRYPTED_BALANCE}|${address}`);
-    const ebSig = vault.sign(ebMsg);
-    const ebResult = await rpc.getEncryptedBalance(address, toBase64(ebSig), toBase64(vault.getPublicKey())) as Record<string, unknown>;
-    const currentCipherStr = String(ebResult?.cipher ?? '');
-    if (!currentCipherStr || currentCipherStr === '0') throw new Error('No encrypted balance available');
-    const currentCipherB64 = currentCipherStr.startsWith('hfhe_v1|') ? currentCipherStr.slice(8) : currentCipherStr;
-
-    // [4] Route through prover cascade (native → remote → WASM fallback)
-    const stealthSeed = crypto.getRandomValues(new Uint8Array(32));
-    const stealthPayload: Record<string, string> = {
-      operation: 'stealth',
-      currentCipherB64,
-      amountRaw: String(amountRaw),
-      seedB64: toBase64(stealthSeed),
-      blindingB64: toBase64(blinding),
-    };
-
-    const proverResult = (await routeProof({
-      operation: 'stealth',
-      payload: stealthPayload,
-      jobId,
-      onStatus: (step, prover) => update({ step, prover }),
-      wasm: async () => {
-        if (!isInitialized()) {
-          await vault.requirePvacKeys();
-        }
-        const seed = crypto.getRandomValues(new Uint8Array(32));
-        const ctDelta = encryptValue(amountRaw, seed);
-        const amtCommit = pedersenCommit(amountRaw, blinding);
-        const sendZkp = makeZeroProofBound(ctDelta, amountRaw, blinding);
-        const currentCipher = fromBase64(currentCipherB64);
-        const ebDecrypted = decryptValue(currentCipher);
-        if (ebDecrypted < amountRaw) throw new Error(`Insufficient encrypted balance: have ${ebDecrypted}, need ${amountRaw}`);
-        const newBalCipher = ctSub(currentCipher, ctDelta);
-        const newBalValue = ebDecrypted - amountRaw;
-        const rpDelta = makeRangeProof(ctDelta, amountRaw);
-        const rpBal = makeRangeProof(newBalCipher, newBalValue);
-        const ctCommitment = commitCt(ctDelta);
-        return {
-          cipher: 'hfhe_v1|' + toBase64(ctDelta),
-          commitment: toBase64(ctCommitment),
-          range_proof_delta: 'rp_v1|' + toBase64(rpDelta),
-          range_proof_balance: 'rp_v1|' + toBase64(rpBal),
-          amount_commitment: toBase64(amtCommit),
-          zero_proof: 'zkzp_v2|' + toBase64(sendZkp),
-        };
-      },
-    }))!;
-
-    const stealthData = JSON.stringify({
-      version: STEALTH_DATA_VERSION,
-      delta_cipher: proverResult.cipher,
-      commitment: proverResult.commitment ?? proverResult.amount_commitment,
-      range_proof_delta: proverResult.range_proof_delta,
-      range_proof_balance: proverResult.range_proof_balance,
-      eph_pub: toBase64(stealth.ephPk),
-      stealth_tag: hexEncode(stealth.tag),
-      enc_amount: stealth.encAmount,
-      claim_pub: hexEncode(stealth.claimPub),
-      amount_commitment: proverResult.amount_commitment,
-      send_zero_proof: proverResult.zero_proof ?? proverResult.send_zero_proof,
-    });
-
-    await update({ step: 'Submitting transaction...' });
-    await submitStealthTx(jobId, stealthData, 0);
-  } catch (err) {
-    const msg = (err as Error).message ?? '';
-    // Definitive errors — don't retry
-    const isFatal = msg.includes('no public key registered') ||
-                    msg.includes('Invalid recipient public key') ||
-                    msg.includes('invalid amount') ||
-                    msg.includes('Insufficient encrypted balance');
-    if (isFatal) {
-      await chrome.storage.local.set({ [storageKey]: { status: 'error', error: msg } });
-    } else {
-      // Network / transient error — retry indefinitely (user can cancel)
-      const nextAttempt = attempt + 1;
-      await chrome.storage.local.set({ [storageKey]: { status: 'running', step: `Error: ${msg}. Retrying... (attempt ${nextAttempt})`, attempt: nextAttempt } });
-      // Store params for potential service-worker restart
-      await chrome.storage.local.set({ [`job_${jobId}_stealth_params`]: { to, amountRaw: String(amountRaw) } });
-      setTimeout(() => runStealthSendJob(jobId, to, amountRaw, nextAttempt), SUBMIT_RETRY_DELAY);
-    }
-  }
-}
-
-async function submitStealthTx(
-  jobId: string,
-  stealthData: string,
-  attempt: number,
-) {
-  const storageKey = `job_${jobId}`;
-  try {
-    if (!vault.isUnlocked()) throw new Error('locked');
-    const address = vault.getAddress();
-
-    const currentJob = await chrome.storage.local.get(storageKey);
-    if (currentJob[storageKey]?.status === 'cancelled') return;
-    if (attempt === 0 && currentJob[storageKey]?.attempt) {
-      attempt = currentJob[storageKey].attempt;
-    }
-
-    await chrome.storage.local.set({ [storageKey]: { status: 'running', step: `Submitting transaction...${attempt > 0 ? ` (retry ${attempt})` : ''}`, attempt } });
-
-    const balInfo = await rpc.getBalance(address);
-    const nonce = balInfo.nonce + 1;
-    const ou = await getOperationFee('stealth');
-
-    const tx = buildSignedTx({ from: address, to: 'stealth', amount: '0', nonce, ou, opType: 'stealth', encryptedData: stealthData });
-    const result = await rpc.submitTransaction(tx);
-    completeJob(jobId, result.hash);
-  } catch (err) {
-    const nextAttempt = attempt + 1;
-    await chrome.storage.local.set({ [storageKey]: { status: 'running', step: `Submitting transaction... (retry ${nextAttempt})`, attempt: nextAttempt } });
-    // Store stealthData for potential resume
-    await chrome.storage.local.set({ [`job_${jobId}_stealth`]: stealthData });
-    setTimeout(() => submitStealthTx(jobId, stealthData, nextAttempt), SUBMIT_RETRY_DELAY);
-  }
-}
-
-// --- Stealth Claim Job ---
-async function runStealthClaimJob(
-  jobId: string,
-  outputId: string,
-  claimSecret: Uint8Array,
-  amount: bigint,
-  blinding: Uint8Array,
-) {
-  const storageKey = `job_${jobId}`;
-  const update = (fields: Record<string, unknown>) => chrome.storage.local.set({ [storageKey]: { status: 'running', ...fields } });
-
-  try {
-    if (!vault.isUnlocked()) throw new Error('locked');
-
-    const amountRaw = amount;
-
-    // Route through prover cascade (native → remote → WASM fallback)
-    const claimSeed = crypto.getRandomValues(new Uint8Array(32));
-    const claimPayload: Record<string, string> = {
-      operation: 'claim',
-      amountRaw: String(amountRaw),
-      seedB64: toBase64(claimSeed),
-      blindingB64: toBase64(blinding),
-    };
-
-    const proverResult = (await routeProof({
-      operation: 'claim',
-      payload: claimPayload,
-      jobId,
-      onStatus: (step, prover) => update({ step, prover }),
-      wasm: async () => {
-        if (!isInitialized()) {
-          await vault.requirePvacKeys();
-        }
-        const seed = crypto.getRandomValues(new Uint8Array(32));
-        const ctClaim = encryptValue(amountRaw, seed);
-        const ctCommitment = commitCt(ctClaim);
-        const zpBytes = makeZeroProofBound(ctClaim, amountRaw, blinding);
-        return {
-          cipher: 'hfhe_v1|' + toBase64(ctClaim),
-          commitment: toBase64(ctCommitment),
-          zero_proof: 'zkzp_v2|' + toBase64(zpBytes),
-        };
-      },
-    }))!;
-
-    const claimData = JSON.stringify({
-      version: STEALTH_DATA_VERSION,
-      output_id: Number(outputId),
-      claim_cipher: proverResult.cipher,
-      commitment: proverResult.commitment ?? proverResult.amount_commitment,
-      claim_secret: hexEncode(claimSecret),
-      zero_proof: proverResult.zero_proof,
-    });
-
-    await update({ step: 'Submitting transaction...' });
-    await submitClaimTx(jobId, claimData, 0);
-  } catch (err) {
-    await chrome.storage.local.set({ [storageKey]: { status: 'error', error: (err as Error).message } });
-  }
-}
-
-async function submitClaimTx(
-  jobId: string,
-  claimData: string,
-  attempt: number,
-) {
-  const storageKey = `job_${jobId}`;
-  try {
-    if (!vault.isUnlocked()) throw new Error('locked');
-    const address = vault.getAddress();
-
-    const currentJob = await chrome.storage.local.get(storageKey);
-    if (currentJob[storageKey]?.status === 'cancelled') return;
-    if (attempt === 0 && currentJob[storageKey]?.attempt) {
-      attempt = currentJob[storageKey].attempt;
-    }
-
-    await chrome.storage.local.set({ [storageKey]: { status: 'running', step: `Submitting transaction...${attempt > 0 ? ` (retry ${attempt})` : ''}`, attempt } });
-
-    const balInfo = await rpc.getBalance(address);
-    const nonce = balInfo.nonce + 1;
-    const ou = await getOperationFee('claim');
-
-    const tx = buildSignedTx({ from: address, to: address, amount: '0', nonce, ou, opType: 'claim', encryptedData: claimData });
-    const result = await rpc.submitTransaction(tx);
-    completeJob(jobId, result.hash);
-  } catch (err) {
-    const msg = (err as Error).message ?? 'unknown error';
-    const isFatal = msg.includes('already claimed') ||
-                    msg.includes('output not found') ||
-                    msg.includes('bad_commitment') ||
-                    msg.includes('invalid signature') ||
-                    msg.includes('bad_claim_secret');
-    if (isFatal) {
-      await chrome.storage.local.set({ [storageKey]: { status: 'error', error: msg } });
-    } else {
-      const nextAttempt = attempt + 1;
-      await chrome.storage.local.set({ [storageKey]: { status: 'running', step: `Submitting... (retry ${nextAttempt} — ${msg})`, attempt: nextAttempt } });
-      await chrome.storage.local.set({ [`job_${jobId}_claim`]: claimData });
-      setTimeout(() => submitClaimTx(jobId, claimData, nextAttempt), SUBMIT_RETRY_DELAY);
-    }
-  }
-}
-
-// Resume transaction submission after offscreen writes crypto result to storage
-const SUBMIT_RETRY_DELAY = 5000; // steady 5s between retries
-
-/** Submit unshield tx directly from in-memory crypto result (no storage roundtrip). */
-async function submitUnshieldDirect(
-  jobId: string,
-  storageKey: string,
-  cryptoResult: Record<string, string>,
-  decAmountRaw: bigint,
-) {
-  try {
-    const encData = JSON.stringify({
-      cipher: cryptoResult.cipher,
-      amount_commitment: cryptoResult.amount_commitment,
-      zero_proof: cryptoResult.zero_proof,
-      blinding: cryptoResult.blinding,
-      range_proof_balance: cryptoResult.range_proof_balance,
-      ...(cryptoResult.range_proof_delta ? { range_proof_delta: cryptoResult.range_proof_delta } : {}),
-      ...(cryptoResult.commitment ? { commitment: cryptoResult.commitment } : {}),
-    });
-
-    const balInfo = await rpc.getBalance(vault.getAddress());
-    const nonce = balInfo.nonce + 1;
-    const ou = await getOperationFee('decrypt');
-
-    const address = vault.getAddress();
-    const tx = buildSignedTx({ from: address, to: address, amount: String(decAmountRaw), nonce, ou, opType: 'decrypt', encryptedData: encData });
-    console.log('[octane] submitting unshield tx, encData length:', encData.length);
-    const result = await rpc.submitTransaction(tx);
-    console.log('[octane] submit response:', JSON.stringify(result));
-    completeJob(jobId, result.hash);
-  } catch (err) {
-    console.error('[octane] direct submit failed:', (err as Error).message);
-    await chrome.storage.local.set({ [storageKey]: { status: 'error', error: (err as Error).message } });
-  }
-}
-
-async function resumeUnshieldSubmission(jobId: string, attempt = 0) {
-  const storageKey = `job_${jobId}`;
-  currentJobStorageKey = storageKey;
-  try {
-    // Check if job was cancelled
-    const currentJob = await chrome.storage.local.get(storageKey);
-    if (currentJob[storageKey]?.status === 'cancelled') {
-      currentJobStorageKey = null;
-      return;
-    }
-
-    // Recover attempt count from storage if starting fresh (service worker restart)
-    if (attempt === 0 && currentJob[storageKey]?.attempt) {
-      attempt = currentJob[storageKey].attempt;
-    }
-
-    const w = vault.isUnlocked() ? { address: vault.getAddress() } : null;
-    // If wallet is locked, try to get params from storage and wait for unlock
-    if (!w) {
-      await chrome.storage.local.set({ [storageKey]: { status: 'pending_unlock', step: 'Unlock wallet to complete unshield' } });
-      return;
-    }
-
-    const { [`job_${jobId}_crypto`]: cryptoResult, [`job_${jobId}_params`]: params } =
-      await chrome.storage.local.get([`job_${jobId}_crypto`, `job_${jobId}_params`]);
-
-    if (!cryptoResult) {
-      await chrome.storage.local.set({ [storageKey]: { status: 'error', error: 'Crypto result not found' } });
-      return;
-    }
-    if (cryptoResult.error) {
-      await chrome.storage.local.set({ [storageKey]: { status: 'error', error: cryptoResult.error } });
-      return;
-    }
-
-    const decAmountRaw = cryptoResult.decAmountRaw ?? params?.decAmountRaw ?? '0';
-    console.log('[octane] resumeUnshieldSubmission cryptoResult keys:', Object.keys(cryptoResult));
-    console.log('[octane] cryptoResult sample:', JSON.stringify(cryptoResult).slice(0, 300));
-
-    // Validate crypto result has required fields
-    if (!cryptoResult.cipher || !cryptoResult.amount_commitment || !cryptoResult.zero_proof) {
-      console.error('[octane] cryptoResult missing required fields, aborting job', jobId);
-      await chrome.storage.local.set({ [storageKey]: { status: 'error', error: 'Corrupted crypto result — please retry' } });
-      await chrome.storage.local.remove([`job_${jobId}_crypto`, `job_${jobId}_params`]);
-      currentJobStorageKey = null;
-      return;
-    }
-
-    // Build and submit transaction
-    await chrome.storage.local.set({ [storageKey]: { status: 'running', step: `Submitting transaction...${attempt > 0 ? ` (retry ${attempt})` : ''}` } });
-    const encData = JSON.stringify({
-      cipher: cryptoResult.cipher,
-      amount_commitment: cryptoResult.amount_commitment,
-      zero_proof: cryptoResult.zero_proof,
-      blinding: cryptoResult.blinding,
-      range_proof_balance: cryptoResult.range_proof_balance,
-      ...(cryptoResult.range_proof_delta ? { range_proof_delta: cryptoResult.range_proof_delta } : {}),
-      ...(cryptoResult.commitment ? { commitment: cryptoResult.commitment } : {}),
-    });
-    console.log('[octane] encData length:', encData.length, 'preview:', encData.slice(0, 200));
-
-    const balInfo = await rpc.getBalance(vault.getAddress());
-    const nonce = balInfo.nonce + 1;
-    const ou = await getOperationFee('decrypt');
-
-    const address = vault.getAddress();
-    const tx = buildSignedTx({ from: address, to: address, amount: String(decAmountRaw), nonce, ou, opType: 'decrypt', encryptedData: encData });
-    console.log('[octane] submitting tx:', JSON.stringify({ ...tx, encrypted_data: `[${encData.length} chars]` }));
-    const result = await rpc.submitTransaction(tx);
-    console.log('[octane] submit response:', JSON.stringify(result));
-    completeJob(jobId, result.hash);
-  } catch (err) {
-    const msg = (err as Error).message ?? '';
-    console.error('[octane] submit error:', msg, err);
-    // Retry indefinitely on any error — user can cancel
-    const nextAttempt = attempt + 1;
-    await chrome.storage.local.set({ [storageKey]: { status: 'running', step: `Submitting transaction... (retry ${nextAttempt})`, attempt: nextAttempt } });
-    setTimeout(() => resumeUnshieldSubmission(jobId, nextAttempt), SUBMIT_RETRY_DELAY);
-    return;
-  } finally {
-    currentJobStorageKey = null;
-  }
-}

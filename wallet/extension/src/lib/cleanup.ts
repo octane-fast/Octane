@@ -2,14 +2,14 @@
  * Service worker startup cleanup: purge stale jobs, resume in-progress ones,
  * and remove orphaned approval entries from previous SW lifetimes.
  */
-import { isStatusKey, jobIdFromKey, jobCryptoKey, allKeysForJob, jobParamsKey } from './jobStore';
+import { isStatusKey, jobIdFromKey, allKeysForJob } from './jobStore';
 import {
   JOB_STATUS_DONE, JOB_STATUS_ERROR, JOB_STATUS_CANCELLED,
   JOB_STATUS_CRYPTO_DONE, JOB_STATUS_PENDING_UNLOCK, JOB_STATUS_RUNNING,
   SK_APPROVAL_PREFIX,
 } from './constants';
 
-export function runJobCleanup(resumeUnshieldSubmission: (jobId: string) => void): void {
+export function runJobCleanup(): void {
   chrome.storage.local.get(null).then((all) => {
     const keysToRemove: string[] = [];
 
@@ -26,20 +26,11 @@ export function runJobCleanup(resumeUnshieldSubmission: (jobId: string) => void)
         // Terminal state — remove primary + all satellites
         keysToRemove.push(...allKeysForJob(jobId));
       } else if (job.status === JOB_STATUS_CRYPTO_DONE || job.status === JOB_STATUS_PENDING_UNLOCK) {
-        // Only unshield jobs use crypto_done / pending_unlock; guard with crypto key check
-        if (all[jobCryptoKey(jobId)]) {
-          resumeUnshieldSubmission(jobId);
-        } else {
-          keysToRemove.push(...allKeysForJob(jobId));
-        }
+        // Legacy offscreen path — no longer resumed, just clean up
+        keysToRemove.push(...allKeysForJob(jobId));
       } else if (job.status === JOB_STATUS_RUNNING) {
-        // Service worker may have died mid-submission; resume if crypto result exists
-        if (all[jobCryptoKey(jobId)]) {
-          resumeUnshieldSubmission(jobId);
-        } else {
-          // Stale running job with no crypto — mark as error
-          keysToRemove.push(key, jobParamsKey(jobId));
-        }
+        // Stale running job from a dead SW — mark as error
+        keysToRemove.push(...allKeysForJob(jobId));
       }
     }
 

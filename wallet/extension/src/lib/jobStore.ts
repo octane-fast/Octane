@@ -103,13 +103,17 @@ export function completeJob(id: string, hash: string, cleanupDelay = JOB_DEFAULT
  * Resume all jobs stuck in pending_unlock state.
  * Called after the wallet is unlocked so background crypto can proceed.
  */
-export async function resumePendingUnlockJobs(resumeFn: (jobId: string) => void): Promise<void> {
+export async function resumePendingUnlockJobs(): Promise<void> {
+  // Legacy: old offscreen-path jobs wrote pending_unlock status.
+  // New jobs never enter this state. Just clean them up.
   const all = await chrome.storage.local.get(null) as Record<string, { status?: string }>;
+  const toRemove: string[] = [];
   for (const key of Object.keys(all)) {
     if (!isStatusKey(key)) continue;
     if (all[key]?.status === JOB_STATUS_PENDING_UNLOCK) {
       const id = jobIdFromKey(key);
-      if (id) resumeFn(id);
+      if (id) toRemove.push(...allKeysForJob(id));
     }
   }
+  if (toRemove.length) chrome.storage.local.remove(toRemove);
 }
