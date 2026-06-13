@@ -1,0 +1,38 @@
+{
+  "manifest_version": 3,
+  "name": "Octane Wallet",
+  "version": "2.3.0",
+  "description": "Wallet for the Octra network",
+  "permissions": ["storage", "offscreen", "proxy"],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+  },
+  "action": {
+    "default_popup": "dist/src/popup/index.html",
+    "default_icon": {
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "background": {
+    "service_worker": "dist/background.js",
+    "type": "module"
+  },
+  "icons": {
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["dist/content.js"],
+      "run_at": "document_start"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["dist/inpage.js", "dist/src/popup/viewer.html"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}

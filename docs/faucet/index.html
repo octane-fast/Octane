@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Octra Faucet</title>
+  <link rel="icon" type="image/svg+xml" href="/icon.svg">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0d0d12; color: #e4e4e7; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; flex-direction: column; }
+    .nav { align-self: flex-start; margin-bottom: 24px; }
+    .nav a { color: #71717a; text-decoration: none; font-size: 0.85rem; }
+    .nav a:hover { color: #a1a1aa; }
+    .container { max-width: 420px; width: 100%; }
+    h1 { font-size: 28px; margin-bottom: 6px; text-align: center; }
+    .subtitle { color: #a1a1aa; font-size: 14px; margin-bottom: 32px; text-align: center; }
+    .card { background: #18181b; border: 1px solid #27272a; border-radius: 12px; padding: 24px; }
+    .step { margin-bottom: 20px; }
+    .step:last-child { margin-bottom: 0; }
+    .step-header { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+    .step-num { width: 24px; height: 24px; border-radius: 50%; background: #27272a; color: #a1a1aa; font-size: 12px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
+    .step-num.active { background: #6366f1; color: #fff; }
+    .step-num.done { background: #16a34a; color: #fff; }
+    .step-title { font-size: 14px; font-weight: 500; }
+    .step-desc { font-size: 13px; color: #71717a; margin-left: 34px; margin-bottom: 8px; }
+    button { padding: 10px 20px; border: none; border-radius: 8px; background: #6366f1; color: #fff; font-size: 14px; font-weight: 600; cursor: pointer; transition: background 0.15s; width: 100%; margin-top: 8px; }
+    button:hover { background: #4f46e5; }
+    button:disabled { opacity: 0.4; cursor: not-allowed; }
+    .status { margin-top: 12px; padding: 10px 14px; border-radius: 8px; font-size: 13px; display: none; }
+    .status.error { display: block; background: #1c1017; border: 1px solid #dc2626; color: #f87171; }
+    .status.success { display: block; background: #0f1c14; border: 1px solid #16a34a; color: #4ade80; }
+    .status.info { display: block; background: #111827; border: 1px solid #3b82f6; color: #93c5fd; }
+    .address { font-family: 'SF Mono', monospace; font-size: 11px; color: #a1a1aa; word-break: break-all; margin-left: 34px; margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid #6366f1; border-top-color: transparent; border-radius: 50%; animation: spin 0.6s linear infinite; vertical-align: middle; margin-right: 6px; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    a { color: #818cf8; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <div class="nav"><a href="/">← octane.fast</a></div>
+  <div class="container">
+    <h1>💧 Octra Faucet</h1>
+    <p class="subtitle">Get 3 OCT for testing. Requires the Octane wallet.</p>
+    <p class="subtitle" id="faucet-balance" style="margin-bottom: 24px; font-family: 'SF Mono', monospace; font-size: 13px;"></p>
+
+    <div class="card">
+      <div class="step">
+        <div class="step-header">
+          <div class="step-num" id="step1-num">1</div>
+          <span class="step-title">Connect Wallet</span>
+        </div>
+        <p class="step-desc">Connect your Octane wallet to identify your address.</p>
+        <div style="margin-left: 34px;">
+          <button id="btn-connect">Connect Wallet</button>
+        </div>
+        <div class="address" id="user-address" style="display:none"></div>
+      </div>
+
+      <div class="step">
+        <div class="step-header">
+          <div class="step-num" id="step2-num">2</div>
+          <span class="step-title">Follow Octane on X</span>
+        </div>
+        <p class="step-desc">Follow our account to stay updated on network news.</p>
+        <div style="margin-left: 34px;">
+          <button id="btn-follow" disabled>Follow @octane__fast</button>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-header">
+          <div class="step-num" id="step3-num">3</div>
+          <span class="step-title">Generate Proof</span>
+        </div>
+        <p class="step-desc">Generate a Pedersen commitment to prove you're using the Octane wallet.</p>
+        <div style="margin-left: 34px;">
+          <button id="btn-claim" disabled>Claim 3 OCT</button>
+        </div>
+      </div>
+
+      <div id="result" class="status"></div>
+    </div>
+
+    <div style="margin-top: 20px; padding: 16px 20px; background: #18181b; border: 1px solid #27272a; border-radius: 12px; font-size: 13px; color: #a1a1aa; line-height: 1.7;">
+      <p style="margin-bottom: 6px;">Faucet empty? Get wOCT on Uniswap and bridge it:</p>
+      <p>1. <a href="https://app.uniswap.org/explore/tokens/ethereum/0x4647e1fe715c9e23959022c2416c71867f5a6e80" target="_blank">Buy wOCT on Uniswap →</a></p>
+      <p>2. <a href="https://bridge.octra.org/" target="_blank">Bridge wOCT to Octra →</a></p>
+    </div>
+  </div>
+
+  <script>
+    const FAUCET_API = 'https://octane-relay.octane-fast.workers.dev/faucet';
+    let userAddress = null;
+
+    function hasClaimed() {
+      return document.cookie.split(';').some(c => c.trim().startsWith('faucet_claimed='));
+    }
+    function setClaimed() {
+      const expires = new Date(Date.now() + 24 * 60 * 60 * 1000).toUTCString();
+      document.cookie = `faucet_claimed=1; expires=${expires}; path=/`;
+    }
+
+    async function fetchFaucetBalance() {
+      try {
+        const res = await fetch(FAUCET_API + '/balance');
+        const data = await res.json();
+        document.getElementById('faucet-balance').textContent = `Faucet balance: ${data.balance} OCT`;
+      } catch {}
+    }
+    fetchFaucetBalance();
+
+    function setStatus(msg, type) {
+      const el = document.getElementById('result');
+      el.className = 'status ' + type;
+      el.innerHTML = msg;
+    }
+
+    function setStep(num, state) {
+      const el = document.getElementById('step' + num + '-num');
+      el.className = 'step-num ' + state;
+    }
+
+    async function call(method, params) {
+      if (!window.octra) throw new Error('Octra wallet not detected. Please install the Octane wallet extension.');
+      return window.octra.request({ method, params });
+    }
+
+    document.getElementById('btn-connect').addEventListener('click', async () => {
+      try {
+        const accounts = await call('octra_requestAccounts');
+        userAddress = accounts[0];
+        document.getElementById('user-address').textContent = userAddress;
+        document.getElementById('user-address').style.display = 'block';
+        document.getElementById('btn-connect').textContent = 'Connected ✓';
+        document.getElementById('btn-connect').disabled = true;
+        document.getElementById('btn-follow').disabled = false;
+        setStep(1, 'done');
+        setStep(2, 'active');
+      } catch (e) {
+        setStatus(e.message, 'error');
+      }
+    });
+
+    document.getElementById('btn-follow').addEventListener('click', () => {
+      window.open('https://x.com/octane__fast', '_blank');
+      document.getElementById('btn-follow').textContent = 'Followed ✓';
+      document.getElementById('btn-follow').disabled = true;
+      document.getElementById('btn-claim').disabled = false;
+      setStep(2, 'done');
+      setStep(3, 'active');
+    });
+
+    document.getElementById('btn-claim').addEventListener('click', async () => {
+      if (!userAddress) return;
+      if (hasClaimed()) {
+        setStatus('You already claimed in the last 24 hours.', 'error');
+        return;
+      }
+      const btn = document.getElementById('btn-claim');
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spinner"></span>Generating commitment...';
+
+      try {
+        const commitment = await call('octra_pvac_commit', [{ value: 3000000 }]);
+        btn.innerHTML = '<span class="spinner"></span>Claiming...';
+        const claimRes = await fetch(FAUCET_API + '/claim', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ address: userAddress, commitment }),
+        });
+        const claimData = await claimRes.json();
+        if (!claimRes.ok) throw new Error(claimData.error || 'Claim failed');
+
+        setStep(3, 'done');
+        setStatus(`✓ Sent 3 OCT to your wallet!<br><a href="https://octrascan.io/tx.html?hash=${claimData.txHash}" target="_blank">View transaction →</a>`, 'success');
+        btn.textContent = 'Claimed ✓';
+        setClaimed();
+        fetchFaucetBalance();
+      } catch (e) {
+        setStatus(e.message, 'error');
+        btn.disabled = false;
+        btn.textContent = 'Claim 3 OCT';
+      }
+    });
+
+    if (window.octra) {
+      call('octra_accounts').then(accounts => {
+        if (accounts && accounts.length > 0) {
+          userAddress = accounts[0];
+          document.getElementById('user-address').textContent = userAddress;
+          document.getElementById('user-address').style.display = 'block';
+          document.getElementById('btn-connect').textContent = 'Connected ✓';
+          document.getElementById('btn-connect').disabled = true;
+          if (hasClaimed()) {
+            document.getElementById('btn-claim').disabled = true;
+            document.getElementById('btn-claim').textContent = 'Claimed ✓';
+            document.getElementById('btn-follow').disabled = true;
+            document.getElementById('btn-follow').textContent = 'Followed ✓';
+            setStatus('You already claimed in the last 24 hours.', 'info');
+            setStep(1, 'done');
+            setStep(2, 'done');
+            setStep(3, 'done');
+          } else {
+            document.getElementById('btn-follow').disabled = false;
+            setStep(1, 'done');
+            setStep(2, 'active');
+          }
+        }
+      }).catch(() => {});
+    }
+  </script>
+</body>
+</html>

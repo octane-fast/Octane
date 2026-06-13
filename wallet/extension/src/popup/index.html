@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Octane</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="app">
+    <!-- Setup Screen -->
+    <div id="screen-setup" class="screen">
+      <img src="file.svg" class="logo logo-large" alt="Octane">
+      <h1>Octane</h1>
+      <div class="setup-form">
+        <button id="btn-create" class="primary">Create New Wallet</button>
+        <button id="btn-import" class="secondary">Import Seed Phrase</button>
+      </div>
+      <div class="tor-section">
+        <div class="tor-section-header">
+          <label class="toggle-row compact">
+            <span class="toggle-label">Route via Tor</span>
+            <input type="checkbox" id="tor-toggle-setup">
+          </label>
+          <a href="https://www.torproject.org/download/" target="_blank" rel="noopener" class="tor-link">Get Tor ↗</a>
+        </div>
+        <ol class="tor-steps">
+          <li>Download & open <a href="https://www.torproject.org/download/" target="_blank" rel="noopener">Tor Browser</a></li>
+          <li>Keep Tor Browser running in the background</li>
+          <li>Enable the toggle above</li>
+        </ol>
+      </div>
+      <div id="tor-status-setup" class="tor-status"></div>
+    </div>
+
+    <!-- Create Wallet -->
+    <div id="screen-create" class="screen hidden">
+      <h2>Your Seed Phrase</h2>
+      <div id="mnemonic-display" class="mnemonic-box"></div>
+      <p class="warning">Write down these 12 words. Never share them.</p>
+      <div class="form-group">
+        <label>Password</label>
+        <input type="password" id="create-password" placeholder="Set a password">
+        <label>Confirm</label>
+        <input type="password" id="create-password-confirm" placeholder="Confirm password">
+      </div>
+      <div class="form-actions">
+        <button id="btn-confirm-create" class="primary" disabled>Continue</button>
+        <button class="link" id="btn-back-setup">Back</button>
+      </div>
+    </div>
+
+    <!-- Import Wallet -->
+    <div id="screen-import" class="screen hidden">
+      <h2>Import Wallet</h2>
+      <textarea id="import-mnemonic" rows="3" placeholder="Enter 12-word seed phrase"></textarea>
+      <div class="form-group">
+        <label>Password</label>
+        <input type="password" id="import-password" placeholder="Set a password">
+      </div>
+      <div class="form-actions">
+        <button id="btn-confirm-import" class="primary" disabled>Import</button>
+        <button class="link" id="btn-back-setup2">Back</button>
+      </div>
+    </div>
+
+    <!-- Unlock -->
+    <div id="screen-unlock" class="screen hidden">
+      <img src="file.svg" class="logo logo-large" alt="Octane">
+      <h1>Octane</h1>
+      <div class="unlock-form">
+        <input type="password" id="unlock-password" placeholder="Enter password">
+        <button id="btn-unlock" class="primary" disabled>Unlock</button>
+        <button id="btn-biometric" class="secondary hidden">Unlock with Touch ID</button>
+      </div>
+      <div class="tor-section">
+        <div class="tor-section-header">
+          <label class="toggle-row compact">
+            <span class="toggle-label">Route via Tor</span>
+            <input type="checkbox" id="tor-toggle-unlock">
+          </label>
+          <a href="https://www.torproject.org/download/" target="_blank" rel="noopener" class="tor-link" id="tor-download-link">Get Tor ↗</a>
+        </div>
+        <ol class="tor-steps">
+          <li>Download & open <a href="https://www.torproject.org/download/" target="_blank" rel="noopener">Tor Browser</a></li>
+          <li>Keep Tor Browser running in the background</li>
+          <li>Enable the toggle above</li>
+        </ol>
+      </div>
+      <div id="tor-status" class="tor-status"></div>
+      <div id="update-banner" class="update-banner hidden">
+        <a href="https://chromewebstore.google.com/detail/octane-wallet/lmijanfaogfbimjlkajaphkiegmpmkid" target="_blank" rel="noopener">Update available — install latest version ↗</a>
+      </div>
+    </div>
+
+    <!-- Prover Recommendation (shown after unlock/create if no prover) -->
+    <div id="screen-prover-rec" class="screen hidden">
+      <div class="prover-rec-content">
+        <svg class="prover-rec-icon" viewBox="0 0 24 24" fill="none" stroke="#0000DB" stroke-width="1.5" width="48" height="48"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+        <h2>Get Octane Accelerator</h2>
+        <p class="prover-rec-desc">For instant private balance and fast shield/unshield operations, install the Octane Accelerator desktop app.</p>
+        <ul class="prover-rec-benefits">
+          <li>⚡ Instant balance decryption</li>
+          <li>⚡ Proofs in seconds (not minutes)</li>
+          <li>⚡ Runs locally — your keys stay private</li>
+        </ul>
+        <button id="btn-download-accelerator" class="primary prover-rec-btn">Download Octane Accelerator ↗</button>
+        <button id="btn-skip-prover-rec" class="link">Skip for now</button>
+      </div>
+    </div>
+
+    <!-- Main Dashboard -->
+    <div id="screen-main" class="screen hidden">
+      <div class="header">
+        <img src="file.svg" class="header-logo" alt="Octane">
+        <div class="header-actions">
+          <button id="btn-prover-settings" class="prover-mode-btn" title="Prover Settings"><span id="prover-mode-label">In-Browser</span></button>
+          <button id="btn-network" class="prover-mode-btn" title="Network" style="font-size:0.65rem; position:relative; left:-4px;"><span id="network-label">mainnet</span></button>
+          <label class="toggle-row compact">
+            <span class="toggle-label">Tor</span>
+            <input type="checkbox" id="tor-toggle-main">
+            <span class="toggle-slider"></span>
+          </label>
+          <button id="btn-settings" class="icon-btn" title="Settings"><svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 01-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg></button>
+        </div>
+      </div>
+      <div class="account-selector">
+        <select id="account-select"></select>
+        <span id="stealth-badge" class="stealth-badge hidden"><svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></span>
+        <button id="btn-copy-address" class="icon-btn"><svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg></button>
+        <button id="btn-add-account" class="icon-btn">+</button>
+        <span id="account-tooltip"></span>
+      </div>
+      <span id="display-address" class="hidden"></span>
+      <div class="balance-section">
+        <div class="balance-label">Total Balance</div>
+        <div id="display-balance" class="balance-value">0.00 OCT</div>
+        <div class="balance-actions">
+          <div id="balance-breakdown" class="balance-breakdown">
+            <span class="balance-sub"><span class="balance-sub-label">Public</span> <span id="display-public-balance">0.00</span></span>
+            <span class="balance-sub"><span class="balance-sub-label">Private</span> <span id="display-private-balance" class="shimmer">···</span></span>
+          </div>
+          <button id="btn-get-octra" class="get-octra-btn">Get OCT</button>
+        </div>
+      </div>
+      <div class="tabs">
+        <button class="tab active" data-tab="send">Send</button>
+        <button class="tab" data-tab="shield">Shield</button>
+        <button class="tab" data-tab="activity">Activity</button>
+        <button class="tab" data-tab="content">Content</button>
+      </div>
+      <div id="tab-send" class="tab-content">
+        <div class="send-to-wrap">
+          <input type="text" id="send-to" placeholder="Recipient address" autocomplete="off">
+          <div id="send-to-suggestions" class="suggestions hidden"></div>
+        </div>
+        <input type="text" id="send-amount" placeholder="Amount (OCT)">
+        <div class="shield-direction-toggle" id="send-mode-toggle">
+          <button class="shield-dir active" id="send-dir-public" data-dir="public">Public</button>
+          <span class="shield-dir-divider"></span>
+          <button class="shield-dir" id="send-dir-stealth" data-dir="stealth">Stealth</button>
+        </div>
+        <button id="btn-submit-send" class="primary" disabled>Confirm Send</button>
+        <div id="send-result" class="result"></div>
+      </div>
+      <div id="tab-shield" class="tab-content hidden">
+        <div class="shield-direction-toggle" id="shield-mode-toggle">
+          <button class="shield-dir active" id="shield-dir-shield" data-dir="shield">Shield</button>
+          <span class="shield-dir-divider"></span>
+          <button class="shield-dir" id="shield-dir-unshield" data-dir="unshield">Unshield</button>
+        </div>
+        <input type="text" id="shield-amount" placeholder="Amount (OCT)">
+        <div id="unshield-amount-wrap" class="stealth-amount-wrap hidden">
+          <input type="text" id="unshield-amount" value="1" readonly>
+          <div class="stealth-amount-arrows">
+            <button class="stealth-arrow up" id="unshield-amount-up">&#9650;</button>
+            <button class="stealth-arrow down" id="unshield-amount-down">&#9660;</button>
+          </div>
+          <span class="stealth-amount-suffix">OCT</span>
+        </div>
+        <button id="btn-submit-shield" class="primary">Confirm Shield</button>
+        <div id="shield-result" class="result"></div>
+      </div>
+      <div id="tab-activity" class="tab-content hidden">
+        <div id="activity-pending"></div>
+        <div id="activity-list" class="activity-list"><p class="muted">No activity yet</p></div>
+        <a id="explorer-link" href="https://octrascan.io/" target="_blank" rel="noopener" class="explorer-link">View all on OctraScan ↗</a>
+      </div>
+      <div id="tab-content" class="tab-content hidden">
+        <div class="content-input-row">
+          <input type="text" id="nft-contract-input" placeholder="NFT contract address (oct...)" autocomplete="off" spellcheck="false">
+          <button id="btn-load-nft" class="primary content-load-btn">Load</button>
+        </div>
+        <div id="nft-collection-header" class="nft-collection-header hidden">
+          <div class="nft-col-info">
+            <span id="nft-col-name" class="nft-col-name"></span>
+            <span id="nft-col-stats" class="nft-col-stats"></span>
+          </div>
+        </div>
+        <div id="nft-grid" class="nft-grid"></div>
+        <div id="nft-empty" class="nft-empty hidden">
+          <p>No NFTs found for this address</p>
+        </div>
+        <div id="nft-loading" class="nft-loading hidden">
+          <div class="shimmer nft-loading-spinner"></div>
+          <p>Loading NFTs…</p>
+        </div>
+      </div>
+    </div>
+
+    <div id="toast" class="toast hidden"></div>
+
+    <!-- PVAC Key Derivation Overlay -->
+    <div id="pvac-loading" class="modal-overlay hidden">
+      <div class="modal" style="text-align:center;padding:2rem;">
+        <div class="shimmer" style="width:40px;height:40px;border-radius:50%;margin:0 auto 1rem;"></div>
+        <p style="margin:0;font-size:0.95rem;">Generating privacy keys…</p>
+        <p class="muted" style="margin:0.5rem 0 0;font-size:0.8rem;">This only happens once per account.</p>
+      </div>
+    </div>
+
+    <!-- octUSD Swap Modal -->
+    <div id="swap-modal" class="modal-overlay hidden">
+      <div class="modal">
+        <div class="modal-header">
+          <h3>octUSD Swap</h3>
+          <button id="swap-close" class="modal-close">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="swap-rate" id="swap-rate">Loading rate...</div>
+          <div class="swap-tabs">
+            <button class="swap-tab active" data-dir="buy">Buy octUSD</button>
+            <button class="swap-tab" data-dir="sell">Sell octUSD</button>
+          </div>
+          <div class="swap-input-group">
+            <label id="swap-input-label">You pay (OCT)</label>
+            <input type="text" id="swap-input" placeholder="0.00" autocomplete="off">
+            <div class="swap-preview" id="swap-preview"></div>
+          </div>
+          <button id="btn-swap-confirm" class="primary" disabled>Confirm Swap</button>
+          <div id="swap-result" class="result"></div>
+        </div>
+      </div>
+    </div>
+    <!-- Settings Modal -->
+    <div id="settings-modal" class="modal-overlay hidden">
+      <div class="modal">
+        <div class="modal-header">
+          <h3>Settings</h3>
+          <button id="settings-close" class="modal-close">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="settings-section">
+            <h4>Fee Overrides <span class="settings-hint">(units are in microOCT)</span></h4>
+            <label class="settings-field">
+              <span>Default (sends)</span>
+              <input type="text" id="fee-default" placeholder="10">
+            </label>
+            <label class="settings-field">
+              <span>Shield (encrypt)</span>
+              <input type="text" id="fee-encrypt" placeholder="auto">
+            </label>
+            <label class="settings-field">
+              <span>Unshield (decrypt)</span>
+              <input type="text" id="fee-decrypt" placeholder="auto">
+            </label>
+            <label class="settings-field">
+              <span>Stealth send</span>
+              <input type="text" id="fee-stealth" placeholder="auto">
+            </label>
+            <label class="settings-field">
+              <span>Stealth claim</span>
+              <input type="text" id="fee-claim" placeholder="auto">
+            </label>
+            <button id="btn-save-fees" class="primary" style="margin-top:8px">Save</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <!-- Prover Settings Modal -->
+    <div id="prover-modal" class="modal-overlay hidden">
+      <div class="modal">
+        <div class="modal-header">
+          <h3>Prover Mode</h3>
+          <button id="prover-close" class="modal-close">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="prover-radio-group">
+            <label class="prover-radio-option" id="prover-opt-local">
+              <input type="radio" name="prover-mode" value="local">
+              <div class="prover-radio-content">
+                <span class="prover-radio-title">Local (Desktop)</span>
+                <span class="prover-radio-desc">Uses Octane Accelerator on this machine</span>
+              </div>
+              <span id="prover-local-indicator" class="prover-indicator"></span>
+            </label>
+            <label class="prover-radio-option has-extra" id="prover-opt-remote">
+              <input type="radio" name="prover-mode" value="remote">
+              <div class="prover-radio-content">
+                <span class="prover-radio-title">Remote</span>
+                <span class="prover-radio-desc">Uses a paired accelerator via relay</span>
+                <div class="prover-pairing-section">
+                  <label class="file-input-label secondary" for="prover-file-input">Import Pairing File</label>
+                  <input type="file" id="prover-file-input" accept=".pair" class="hidden">
+                  <button id="btn-remove-pairing" class="link" style="display:none">Remove Pairing</button>
+                </div>
+              </div>
+              <span id="prover-remote-indicator" class="prover-indicator"></span>
+            </label>
+            <label class="prover-radio-option not-recommended" id="prover-opt-browser">
+              <input type="radio" name="prover-mode" value="browser">
+              <div class="prover-radio-content">
+                <span class="prover-radio-title">In-Browser <span class="badge-warn">Not Recommended</span></span>
+                <span class="prover-radio-desc">Slow WASM fallback — proofs take minutes</span>
+              </div>
+            </label>
+          </div>
+          <div id="prover-cta" class="prover-cta hidden">
+            <p class="prover-cta-text">Get the Octane Accelerator for instant proofs and private balance decryption.</p>
+            <button id="btn-download-accelerator-cta" class="primary prover-cta-btn">Download Octane Accelerator ↗</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script type="module" src="index.ts"></script>
+</body>
+</html>

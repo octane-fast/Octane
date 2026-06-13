@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Octane Demo App</title>
+  <link rel="icon" type="image/svg+xml" href="/icon.svg">
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; background: #0d0d12; color: #e4e4e7; min-height: 100vh; padding: 40px 20px; }
+    .container { max-width: 640px; margin: 0 auto; }
+    h1 { font-family: 'Orbitron', sans-serif; font-size: 24px; margin-bottom: 8px; font-weight: 900; letter-spacing: 2px; }
+    .subtitle { color: #a1a1aa; font-size: 14px; margin-bottom: 32px; }
+    .card { background: #18181b; border: 1px solid #27272a; border-radius: 12px; padding: 20px; margin-bottom: 16px; }
+    .card h2 { font-family: 'Orbitron', sans-serif; font-size: 14px; margin-bottom: 12px; color: #f4f4f5; letter-spacing: 1px; }
+    .card p { font-size: 13px; color: #a1a1aa; margin-bottom: 12px; }
+    label { display: block; font-size: 12px; color: #a1a1aa; margin-bottom: 4px; }
+    input { width: 100%; padding: 8px 12px; border: 1px solid #3f3f46; border-radius: 6px; background: #09090b; color: #e4e4e7; font-size: 14px; margin-bottom: 12px; }
+    input:focus { outline: none; border-color: #6366f1; }
+    button { padding: 8px 16px; border: none; border-radius: 6px; background: #6366f1; color: #fff; font-size: 13px; font-weight: 600; cursor: pointer; transition: background 0.15s; }
+    button:hover { background: #4f46e5; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .result { margin-top: 12px; padding: 10px; background: #09090b; border: 1px solid #27272a; border-radius: 6px; font-size: 12px; font-family: 'SF Mono', monospace; word-break: break-all; white-space: pre-wrap; max-height: 200px; overflow-y: auto; }
+    .result.error { border-color: #dc2626; color: #f87171; }
+    .result.success { border-color: #16a34a; color: #4ade80; }
+    .status { font-size: 12px; color: #a1a1aa; margin-bottom: 16px; }
+    .status.connected { color: #4ade80; }
+    .row { display: flex; gap: 8px; align-items: flex-end; }
+    .row > * { flex: 1; }
+    .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .source-panel { margin-top: 12px; display: none; }
+    .source-panel pre { background: #09090b; border: 1px solid #27272a; border-radius: 8px; padding: 16px; overflow-x: auto; font-size: 12px; font-family: 'SF Mono', monospace; line-height: 1.6; color: #a1a1aa; max-height: 500px; overflow-y: auto; }
+    .copy-bar { display: flex; justify-content: flex-end; margin-bottom: 4px; }
+    .copy-bar button { background: #27272a; color: #a1a1aa; font-size: 11px; padding: 4px 10px; }
+    .copy-bar button:hover { background: #3f3f46; color: #e4e4e7; }
+    nav { display: flex; align-items: center; justify-content: space-between; margin-bottom: 40px; padding-bottom: 16px; border-bottom: 1px solid #1e1e22; }
+    .nav-logo { display: flex; align-items: center; gap: 10px; text-decoration: none; color: inherit; }
+    .nav-logo img { width: 28px; height: 28px; border-radius: 6px; }
+    .nav-logo span { font-family: 'Orbitron', sans-serif; font-weight: 700; font-size: 14px; letter-spacing: 2px; }
+    .nav-links { display: flex; gap: 20px; }
+    .nav-links a { color: #71717a; text-decoration: none; font-size: 13px; font-weight: 500; transition: color 0.2s; }
+    .nav-links a:hover { color: #e4e4e7; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <nav>
+      <a class="nav-logo" href="/">
+        <img src="/icon.svg" alt="Octane">
+        <span>OCTANE</span>
+      </a>
+      <div class="nav-links">
+        <a href="/">Home</a>
+        <a href="/docs/">API Docs</a>
+      </div>
+    </nav>
+    <h1>Octane Demo App</h1>
+    <p class="subtitle">Generate FHE encryptions, range proofs, and zero-knowledge proofs using the Octane wallet.</p>
+
+    <div style="margin-bottom: 24px;">
+      <button id="btn-source" style="background:#27272a;color:#a1a1aa;">View Source</button>
+      <div id="source-panel" class="source-panel">
+        <div class="copy-bar"><button id="btn-copy-source">Copy to clipboard</button></div>
+        <pre id="source-code"></pre>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Connection</h2>
+      <p id="status" class="status">Not connected</p>
+      <button id="btn-connect">Connect Wallet</button>
+      <div id="connect-result" class="result" style="display:none"></div>
+    </div>
+
+    <div class="card">
+      <h2>1. Encrypt a Value (FHE)</h2>
+      <p>Encrypt an integer using your PVAC key. The ciphertext is fully homomorphic.</p>
+      <label>Value (integer)</label>
+      <input type="number" id="encrypt-value" placeholder="e.g. 42">
+      <button id="btn-encrypt">Encrypt</button>
+      <div id="encrypt-result" class="result" style="display:none"></div>
+    </div>
+
+    <div class="card">
+      <h2>2. Decrypt a Ciphertext</h2>
+      <p>Decrypt a PVAC ciphertext back to its plaintext value. Requires user approval.</p>
+      <label>Ciphertext (base64)</label>
+      <input type="text" id="decrypt-ct" placeholder="Paste ciphertext from step 1">
+      <button id="btn-decrypt">Decrypt</button>
+      <div id="decrypt-result" class="result" style="display:none"></div>
+    </div>
+
+    <div class="card">
+      <h2>3. Range Proof</h2>
+      <p>Prove that a ciphertext contains a value within the valid range, without revealing it.</p>
+      <label>Ciphertext (base64)</label>
+      <input type="text" id="range-ct" placeholder="Paste ciphertext">
+      <label>Value (must match encrypted value)</label>
+      <input type="number" id="range-value" placeholder="e.g. 42">
+      <button id="btn-range">Generate Range Proof</button>
+      <div id="range-result" class="result" style="display:none"></div>
+    </div>
+
+    <div class="card">
+      <h2>4. Pedersen Commitment</h2>
+      <p>Create a binding commitment to a value. Reveals nothing about the value.</p>
+      <label>Value (integer)</label>
+      <input type="number" id="commit-value" placeholder="e.g. 100">
+      <button id="btn-commit">Commit</button>
+      <div id="commit-result" class="result" style="display:none"></div>
+    </div>
+
+    <div class="card">
+      <h2>5. Homomorphic Add</h2>
+      <p>Add two ciphertexts together without decrypting. The result encrypts the sum of the two plaintext values.</p>
+      <label>Ciphertext A (base64)</label>
+      <input type="text" id="add-a" placeholder="Paste first ciphertext">
+      <label>Ciphertext B (base64)</label>
+      <input type="text" id="add-b" placeholder="Paste second ciphertext">
+      <button id="btn-ct-add">Add Ciphertexts</button>
+      <div id="ct-add-result" class="result" style="display:none"></div>
+    </div>
+
+    <div class="card">
+      <h2>6. Homomorphic Multiply</h2>
+      <p>Multiply two ciphertexts together. The result encrypts the product of the two plaintext values.</p>
+      <label>Ciphertext A (base64)</label>
+      <input type="text" id="mul-a" placeholder="Paste first ciphertext">
+      <label>Ciphertext B (base64)</label>
+      <input type="text" id="mul-b" placeholder="Paste second ciphertext">
+      <button id="btn-ct-mul">Multiply Ciphertexts</button>
+      <div id="ct-mul-result" class="result" style="display:none"></div>
+    </div>
+
+    <div class="card">
+      <h2>7. Add Constant</h2>
+      <p>Add a plaintext constant to an encrypted value. The result encrypts (original + constant).</p>
+      <label>Ciphertext (base64)</label>
+      <input type="text" id="add-const-ct" placeholder="Paste ciphertext">
+      <label>Constant (integer)</label>
+      <input type="number" id="add-const-value" placeholder="e.g. 10">
+      <button id="btn-ct-add-const">Add Constant</button>
+      <div id="ct-add-const-result" class="result" style="display:none"></div>
+    </div>
+
+    <div class="card">
+      <h2>8. Get PVAC Public Key</h2>
+      <p>Retrieve your PVAC public key for third-party verification or key exchange.</p>
+      <button id="btn-pubkey">Get Public Key</button>
+      <div id="pubkey-result" class="result" style="display:none"></div>
+    </div>
+
+    <div class="card">
+      <h2>9. Encrypt &amp; Prove</h2>
+      <p>Encrypt a value and generate a Pedersen commitment + bound zero proof in a single approved operation. Optionally includes a range proof.</p>
+      <label>Value (integer)</label>
+      <input type="number" id="ep-value" placeholder="e.g. 1000000">
+      <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#a1a1aa;margin-bottom:12px;">
+        <input type="checkbox" id="ep-range" style="width:auto;margin:0;"> Include range proof
+      </label>
+      <button id="btn-encrypt-prove">Encrypt &amp; Prove</button>
+      <div id="ep-result" class="result" style="display:none"></div>
+    </div>
+
+    <div class="card">
+      <h2>10. Encrypted Transfer</h2>
+      <p>Encrypt a transfer amount, subtract it from an encrypted balance, and generate range proofs — all in one approved operation. Paste the sender's encrypted balance ciphertext.</p>
+      <label>Sender Balance Ciphertext (raw base64)</label>
+      <input type="text" id="et-balance" placeholder="Paste raw base64 ciphertext">
+      <label>Sender Balance Value (plaintext integer)</label>
+      <input type="number" id="et-balance-val" placeholder="e.g. 1000000">
+      <label>Transfer Amount (integer)</label>
+      <input type="number" id="et-amount" placeholder="e.g. 100000">
+      <button id="btn-stealth-transfer">Encrypt &amp; Transfer</button>
+      <div id="et-result" class="result" style="display:none"></div>
+    </div>
+  </div>
+
+  <script>
+    function showResult(id, data, isError) {
+      const el = document.getElementById(id);
+      el.style.display = 'block';
+      el.className = 'result ' + (isError ? 'error' : 'success');
+      el.textContent = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+    }
+
+    async function call(method, params) {
+      if (!window.octra) throw new Error('Octra wallet not detected. Install the extension.');
+      return window.octra.request({ method, params });
+    }
+
+    document.getElementById('btn-connect').addEventListener('click', async () => {
+      try {
+        const accounts = await call('octra_requestAccounts');
+        document.getElementById('status').textContent = 'Connected: ' + accounts[0];
+        document.getElementById('status').className = 'status connected';
+        showResult('connect-result', { address: accounts[0] });
+      } catch (e) {
+        showResult('connect-result', e.message, true);
+      }
+    });
+
+    document.getElementById('btn-encrypt').addEventListener('click', async () => {
+      const value = parseInt(document.getElementById('encrypt-value').value);
+      if (isNaN(value)) { showResult('encrypt-result', 'Enter a valid integer', true); return; }
+      try {
+        const res = await call('octra_pvac_encrypt', [{ value }]);
+        showResult('encrypt-result', res);
+        // Auto-fill decrypt and range fields
+        if (res.ciphertext) {
+          document.getElementById('decrypt-ct').value = res.ciphertext;
+          document.getElementById('range-ct').value = res.ciphertext;
+          document.getElementById('range-value').value = value;
+        }
+      } catch (e) { showResult('encrypt-result', e.message, true); }
+    });
+
+    document.getElementById('btn-decrypt').addEventListener('click', async () => {
+      const ct = document.getElementById('decrypt-ct').value.trim();
+      if (!ct) { showResult('decrypt-result', 'Enter a ciphertext', true); return; }
+      try {
+        const res = await call('octra_pvac_decrypt', [{ ciphertext: ct }]);
+        showResult('decrypt-result', res);
+      } catch (e) { showResult('decrypt-result', e.message, true); }
+    });
+
+    document.getElementById('btn-range').addEventListener('click', async () => {
+      const ct = document.getElementById('range-ct').value.trim();
+      const value = parseInt(document.getElementById('range-value').value);
+      if (!ct || isNaN(value)) { showResult('range-result', 'Fill in both fields', true); return; }
+      try {
+        const res = await call('octra_pvac_rangeProof', [{ ciphertext: ct, value }]);
+        showResult('range-result', res);
+      } catch (e) { showResult('range-result', e.message, true); }
+    });
+
+    document.getElementById('btn-commit').addEventListener('click', async () => {
+      const value = parseInt(document.getElementById('commit-value').value);
+      if (isNaN(value)) { showResult('commit-result', 'Enter a valid integer', true); return; }
+      try {
+        const res = await call('octra_pvac_commit', [{ value }]);
+        showResult('commit-result', res);
+      } catch (e) { showResult('commit-result', e.message, true); }
+    });
+
+    document.getElementById('btn-ct-add').addEventListener('click', async () => {
+      const a = document.getElementById('add-a').value.trim();
+      const b = document.getElementById('add-b').value.trim();
+      if (!a || !b) { showResult('ct-add-result', 'Paste both ciphertexts', true); return; }
+      try {
+        const res = await call('octra_pvac_ctAdd', [{ a, b }]);
+        showResult('ct-add-result', res);
+      } catch (e) { showResult('ct-add-result', e.message, true); }
+    });
+
+    document.getElementById('btn-ct-mul').addEventListener('click', async () => {
+      const a = document.getElementById('mul-a').value.trim();
+      const b = document.getElementById('mul-b').value.trim();
+      if (!a || !b) { showResult('ct-mul-result', 'Paste both ciphertexts', true); return; }
+      try {
+        const res = await call('octra_pvac_ctMul', [{ a, b }]);
+        showResult('ct-mul-result', res);
+      } catch (e) { showResult('ct-mul-result', e.message, true); }
+    });
+
+    document.getElementById('btn-ct-add-const').addEventListener('click', async () => {
+      const ct = document.getElementById('add-const-ct').value.trim();
+      const value = parseInt(document.getElementById('add-const-value').value);
+      if (!ct || isNaN(value)) { showResult('ct-add-const-result', 'Fill in both fields', true); return; }
+      try {
+        const res = await call('octra_pvac_ctAddConst', [{ ciphertext: ct, value }]);
+        showResult('ct-add-const-result', res);
+      } catch (e) { showResult('ct-add-const-result', e.message, true); }
+    });
+
+    document.getElementById('btn-pubkey').addEventListener('click', async () => {
+      try {
+        const res = await call('octra_pvac_getPubkey');
+        showResult('pubkey-result', res);
+      } catch (e) { showResult('pubkey-result', e.message, true); }
+    });
+
+    document.getElementById('btn-encrypt-prove').addEventListener('click', async () => {
+      const value = parseInt(document.getElementById('ep-value').value);
+      if (isNaN(value)) { showResult('ep-result', 'Enter a valid integer', true); return; }
+      const rangeProof = document.getElementById('ep-range').checked;
+      try {
+        const res = await call('octra_pvac_encryptProve', [{ value, rangeProof }]);
+        showResult('ep-result', res);
+      } catch (e) { showResult('ep-result', e.message, true); }
+    });
+
+    document.getElementById('btn-stealth-transfer').addEventListener('click', async () => {
+      const balance = document.getElementById('et-balance').value.trim();
+      const balanceValue = parseInt(document.getElementById('et-balance-val').value);
+      const amount = parseInt(document.getElementById('et-amount').value);
+      if (!balance) { showResult('et-result', 'Paste a balance ciphertext', true); return; }
+      if (isNaN(balanceValue)) { showResult('et-result', 'Enter the sender balance value', true); return; }
+      if (isNaN(amount)) { showResult('et-result', 'Enter a transfer amount', true); return; }
+      try {
+        const res = await call('octra_pvac_stealthTransfer', [{ balance, amount, balanceValue }]);
+        showResult('et-result', res);
+      } catch (e) { showResult('et-result', e.message, true); }
+    });
+
+    // Check if wallet is already connected
+    if (window.octra) {
+      call('octra_accounts').then(accounts => {
+        if (accounts && accounts.length > 0) {
+          document.getElementById('status').textContent = 'Connected: ' + accounts[0];
+          document.getElementById('status').className = 'status connected';
+        }
+      }).catch(() => {});
+    }
+
+    // View Source
+    document.getElementById('btn-source').addEventListener('click', async () => {
+      const panel = document.getElementById('source-panel');
+      if (panel.style.display === 'block') {
+        panel.style.display = 'none';
+        document.getElementById('btn-source').textContent = 'View Source';
+        return;
+      }
+      const pre = document.getElementById('source-code');
+      if (!pre.textContent) {
+        try {
+          const res = await fetch(window.location.href);
+          const html = await res.text();
+          pre.textContent = html;
+        } catch (e) {
+          pre.textContent = 'Failed to fetch source: ' + e.message;
+        }
+      }
+      panel.style.display = 'block';
+      document.getElementById('btn-source').textContent = 'Hide Source';
+    });
+
+    document.getElementById('btn-copy-source').addEventListener('click', () => {
+      const text = document.getElementById('source-code').textContent;
+      navigator.clipboard.writeText(text);
+      const btn = document.getElementById('btn-copy-source');
+      btn.textContent = 'Copied!';
+      setTimeout(() => btn.textContent = 'Copy to clipboard', 2000);
+    });
+  </script>
+</body>
+</html>

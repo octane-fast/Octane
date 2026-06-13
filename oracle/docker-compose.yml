@@ -1,0 +1,7 @@
+services:
+  oracle:
+    image: ghcr.io/octane-defi/octusd-oracle:sha-4882472
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      - PORT=8080

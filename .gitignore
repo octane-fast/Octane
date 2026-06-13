@@ -1,0 +1,10 @@
+.env
+/data/
+target/
+node_modules/
+__pycache__/
+*.oct
+wallet/octane-wallet.zip
+wallet/extension/dist/
+wallet/reference/
+.DS_Store

@@ -1,0 +1,739 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Wallet API — Octane Docs</title>
+  <link rel="icon" type="image/svg+xml" href="/icon.svg">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0a0a0f;
+      color: #c9c9d0;
+      min-height: 100vh;
+      display: flex;
+    }
+    /* Sidebar */
+    .sidebar {
+      width: 260px;
+      min-width: 260px;
+      background: #111113;
+      border-right: 1px solid #1e1e22;
+      padding: 24px 0;
+      overflow-y: auto;
+      position: sticky;
+      top: 0;
+      height: 100vh;
+    }
+    .sidebar-header {
+      padding: 0 20px 20px;
+      border-bottom: 1px solid #1e1e22;
+      margin-bottom: 16px;
+    }
+    .sidebar-header a {
+      color: #71717a;
+      text-decoration: none;
+      font-size: 0.8rem;
+      display: block;
+      margin-bottom: 8px;
+    }
+    .sidebar-header a:hover { color: #a1a1aa; }
+    .sidebar-header h2 {
+      font-size: 1rem;
+      font-weight: 700;
+      color: #e4e4e7;
+    }
+    .sidebar-section {
+      margin-bottom: 8px;
+    }
+    .sidebar-section-title {
+      padding: 8px 20px;
+      font-size: 0.7rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #52525b;
+    }
+    .sidebar-link {
+      display: block;
+      padding: 6px 20px 6px 28px;
+      font-size: 0.85rem;
+      color: #71717a;
+      text-decoration: none;
+      transition: all 0.1s;
+      border-left: 2px solid transparent;
+    }
+    .sidebar-link:hover { color: #a1a1aa; background: #18181b; }
+    .sidebar-link.active {
+      color: #a5b4fc;
+      border-left-color: #6366f1;
+      background: #18181b;
+    }
+    /* Main content */
+    .main {
+      flex: 1;
+      max-width: 800px;
+      padding: 48px 48px 100px;
+    }
+    .main h1 {
+      font-size: 2rem;
+      font-weight: 800;
+      color: #e4e4e7;
+      margin-bottom: 12px;
+    }
+    .main h2 {
+      font-size: 1.4rem;
+      font-weight: 700;
+      color: #e4e4e7;
+      margin-top: 48px;
+      margin-bottom: 12px;
+      padding-top: 24px;
+      border-top: 1px solid #1e1e22;
+    }
+    .main h3 {
+      font-size: 1.1rem;
+      font-weight: 600;
+      color: #e4e4e7;
+      margin-top: 32px;
+      margin-bottom: 8px;
+    }
+    .main p, .main li {
+      font-size: 0.95rem;
+      line-height: 1.7;
+      color: #a1a1aa;
+      margin-bottom: 12px;
+    }
+    .main ul { padding-left: 20px; margin-bottom: 16px; }
+    .main li { margin-bottom: 6px; }
+    .main strong { color: #e4e4e7; }
+    .main code {
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      font-size: 0.85rem;
+      background: #18181b;
+      border: 1px solid #27272a;
+      padding: 1px 5px;
+      border-radius: 4px;
+      color: #c4b5fd;
+    }
+    .main a { color: #818cf8; text-decoration: none; }
+    .main a:hover { text-decoration: underline; }
+    /* Code blocks */
+    pre {
+      background: #111113;
+      border: 1px solid #1e1e22;
+      border-radius: 8px;
+      padding: 16px 20px;
+      overflow-x: auto;
+      margin-bottom: 16px;
+    }
+    pre code {
+      background: none;
+      border: none;
+      padding: 0;
+      font-size: 0.85rem;
+      color: #a1a1aa;
+      line-height: 1.6;
+    }
+    .comment { color: #52525b; }
+    .keyword { color: #c4b5fd; }
+    .string { color: #86efac; }
+    .number { color: #fbbf24; }
+    /* Method badge */
+    .method {
+      display: inline-block;
+      font-size: 0.7rem;
+      font-weight: 700;
+      padding: 2px 8px;
+      border-radius: 4px;
+      margin-right: 8px;
+      text-transform: uppercase;
+    }
+    .method-post { background: #1e3a2f; color: #4ade80; }
+    .method-get { background: #1e293b; color: #60a5fa; }
+    /* Param table */
+    .params {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 16px;
+    }
+    .params th, .params td {
+      text-align: left;
+      padding: 8px 12px;
+      border-bottom: 1px solid #1e1e22;
+      font-size: 0.85rem;
+    }
+    .params th {
+      color: #71717a;
+      font-weight: 600;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .params td { color: #a1a1aa; }
+    .params td:first-child { color: #c4b5fd; font-family: 'SF Mono', monospace; font-size: 0.8rem; }
+    .required { color: #f87171; font-size: 0.7rem; font-weight: 600; }
+    /* Mobile */
+    .mobile-header { display: none; }
+    @media (max-width: 768px) {
+      .sidebar { display: none; }
+      .mobile-header { display: block; padding: 16px 20px; border-bottom: 1px solid #1e1e22; }
+      .mobile-header a { color: #71717a; text-decoration: none; font-size: 0.85rem; }
+      .main { padding: 24px 20px 80px; }
+      .main h1 { font-size: 1.5rem; }
+    }
+  </style>
+</head>
+<body>
+  <div class="sidebar">
+    <div class="sidebar-header">
+      <a href="/">← octane.fast</a>
+      <h2>📖 Wallet API</h2>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-section-title">Getting Started</div>
+      <a class="sidebar-link active" href="#overview">Overview</a>
+      <a class="sidebar-link" href="#authentication">Authentication</a>
+      <a class="sidebar-link" href="#errors">Error Handling</a>
+      <a class="sidebar-link" href="/dev/" target="_blank">Example App ↗</a>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-section-title">Connection</div>
+      <a class="sidebar-link" href="#requestAccounts">octra_requestAccounts</a>
+      <a class="sidebar-link" href="#accounts">octra_accounts</a>
+      <a class="sidebar-link" href="#disconnect">octra_disconnect</a>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-section-title">Balances</div>
+      <a class="sidebar-link" href="#balance">octra_balance</a>
+      <a class="sidebar-link" href="#encryptedBalance">octra_encryptedBalance</a>
+      <a class="sidebar-link" href="#decryptedBalance">octra_decryptedBalance</a>
+      <a class="sidebar-link" href="#tokens">octra_tokensByAddress</a>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-section-title">Transactions</div>
+      <a class="sidebar-link" href="#sendTransaction">octra_sendTransaction</a>
+      <a class="sidebar-link" href="#signMessage">octra_signMessage</a>
+      <a class="sidebar-link" href="#contractCall">octra_contractCall</a>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-section-title">Privacy (PVAC)</div>
+      <a class="sidebar-link" href="#pvac_encrypt">octra_pvac_encrypt</a>
+      <a class="sidebar-link" href="#pvac_encryptProve">octra_pvac_encryptProve</a>
+      <a class="sidebar-link" href="#pvac_decrypt">octra_pvac_decrypt</a>
+      <a class="sidebar-link" href="#pvac_commit">octra_pvac_commit</a>
+      <a class="sidebar-link" href="#pvac_rangeProof">octra_pvac_rangeProof</a>
+      <a class="sidebar-link" href="#pvac_ctAdd">octra_pvac_ctAdd</a>
+      <a class="sidebar-link" href="#pvac_ctSub">octra_pvac_ctSub</a>
+      <a class="sidebar-link" href="#pvac_ctMul">octra_pvac_ctMul</a>
+      <a class="sidebar-link" href="#pvac_ctAddConst">octra_pvac_ctAddConst</a>
+      <a class="sidebar-link" href="#pvac_ctSubConst">octra_pvac_ctSubConst</a>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-section-title">Stealth Transfers</div>
+      <a class="sidebar-link" href="#stealth_send">octra_stealth_send</a>
+      <a class="sidebar-link" href="#pvac_stealthTransfer">octra_pvac_stealthTransfer</a>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-section-title">Network</div>
+      <a class="sidebar-link" href="#networkInfo">octra_getNetworkInfo</a>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-section-title">Examples</div>
+      <a class="sidebar-link" href="/dev/" target="_blank">PVAC Proof Demo ↗</a>
+    </div>
+  </div>
+
+  <div class="main">
+    <div class="mobile-header"><a href="/">← octane.fast</a></div>
+
+    <!-- Overview -->
+    <h1 id="overview">Wallet API Reference</h1>
+    <p>The Octane wallet exposes a JSON-RPC API via <code>window.octra</code>. DApps call methods using <code>window.octra.request({ method, params })</code>.</p>
+    <p>This is the same provider pattern used by MetaMask and other Ethereum wallets.</p>
+
+    <pre><code><span class="comment">// Basic usage</span>
+<span class="keyword">const</span> accounts = <span class="keyword">await</span> window.octra.request({
+  method: <span class="string">'octra_requestAccounts'</span>,
+});
+console.log(accounts[<span class="number">0</span>]); <span class="comment">// "octAbc..."</span></code></pre>
+
+    <p style="margin-top:20px; padding: 14px 18px; background: rgba(99,102,241,0.08); border: 1px solid rgba(99,102,241,0.2); border-radius: 8px; font-size: 0.9rem;">
+      💡 <strong>Live example:</strong> <a href="/dev/">Open the PVAC Proof Demo →</a> — an interactive page that exercises encrypt, decrypt, range proof, and commitment APIs against your wallet.
+    </p>
+
+    <!-- Authentication -->
+    <h2 id="authentication">Authentication</h2>
+    <p>When a Dapp calls a method, the extension prompts the user for approval (for sensitive operations like signing or sending).</p>
+    <p>It's usually best to call <code>octra_requestAccounts</code> first to establish a connection and get the user's address.</p>
+
+    <!-- Errors -->
+    <h2 id="errors">Error Handling</h2>
+    <p>All methods reject with an <code>Error</code> if something goes wrong. The wallet returns structured error objects with an <code>error</code> string field. Handle them in a try/catch:</p>
+    <pre><code><span class="keyword">try</span> {
+  <span class="keyword">const</span> result = <span class="keyword">await</span> window.octra.request({ method: <span class="string">'octra_balance'</span> });
+} <span class="keyword">catch</span> (e) {
+  console.log(e.message); <span class="comment">// error string from the table below</span>
+}</code></pre>
+
+    <h3>Connection Errors</h3>
+    <table class="params">
+      <tr><th>Error</th><th>Description</th></tr>
+      <tr><td><code>User rejected connection</code></td><td>User denied the connection approval popup</td></tr>
+      <tr><td><code>User rejected request</code></td><td>User denied a generic approval popup (PVAC encrypt, decrypt, range proof, etc.)</td></tr>
+    </table>
+
+    <h3>Wallet State Errors</h3>
+    <table class="params">
+      <tr><th>Error</th><th>Description</th></tr>
+      <tr><td><code>locked</code></td><td>Wallet is locked — call <code>octra_requestAccounts</code> to trigger unlock</td></tr>
+      <tr><td><code>Wallet is locked</code></td><td>Same as above, used in dApp context</td></tr>
+      <tr><td><code>no wallet</code></td><td>Extension installed but no wallet has been created or imported</td></tr>
+      <tr><td><code>PVAC derivation failed</code></td><td>Failed to derive privacy keys from the seed</td></tr>
+    </table>
+
+    <h3>Transaction Errors</h3>
+    <table class="params">
+      <tr><th>Error</th><th>Description</th></tr>
+      <tr><td><code>User rejected transaction</code></td><td>User denied the send transaction approval popup</td></tr>
+      <tr><td><code>User rejected signature request</code></td><td>User denied the message signing approval popup</td></tr>
+      <tr><td><code>User rejected contract call</code></td><td>User denied the contract call approval popup</td></tr>
+      <tr><td><code>User rejected decrypt request</code></td><td>User denied the PVAC decrypt approval popup</td></tr>
+      <tr><td><code>invalid amount</code></td><td>Amount is zero, negative, or not a valid number</td></tr>
+      <tr><td><code>Invalid contract call data</code></td><td>Malformed calldata passed to <code>octra_contractCall</code></td></tr>
+    </table>
+
+    <h3>Balance & Privacy Errors</h3>
+    <table class="params">
+      <tr><th>Error</th><th>Description</th></tr>
+      <tr><td><code>missing value</code></td><td>Required <code>value</code> parameter not provided (PVAC encrypt)</td></tr>
+      <tr><td><code>Missing ciphertext</code></td><td>Ciphertext not provided for decrypt operation</td></tr>
+      <tr><td><code>No encrypted balance</code></td><td>Shield/unshield attempted but no on-chain encrypted balance exists</td></tr>
+      <tr><td><code>Insufficient encrypted balance: have X, need Y</code></td><td>Unshield or stealth send amount exceeds the encrypted balance</td></tr>
+    </table>
+
+    <h3>Stealth Transfer Errors</h3>
+    <table class="params">
+      <tr><th>Error</th><th>Description</th></tr>
+      <tr><td><code>recipient_no_pvac</code></td><td>Recipient has no PVAC public key registered on-chain — they need funds to receive stealth sends</td></tr>
+      <tr><td><code>Recipient has no public key registered</code></td><td>Recipient has never made a transaction — they must transact at least once</td></tr>
+      <tr><td><code>Invalid recipient public key</code></td><td>Recipient's registered public key is malformed</td></tr>
+    </table>
+
+    <h3>Network Errors</h3>
+    <table class="params">
+      <tr><th>Error</th><th>Description</th></tr>
+      <tr><td><code>Tor proxy not reachable at 127.0.0.1:9050</code></td><td>Tor routing enabled but Tor Browser is not running</td></tr>
+    </table>
+
+    <!-- Connection methods -->
+    <h2>Connection</h2>
+
+    <h3 id="requestAccounts">octra_requestAccounts</h3>
+    <p>Requests permission to connect. Opens an approval popup in the wallet extension. Returns an array with the active account address.</p>
+    <pre><code><span class="keyword">const</span> accounts = <span class="keyword">await</span> window.octra.request({
+  method: <span class="string">'octra_requestAccounts'</span>,
+});
+<span class="comment">// ["octAbc123..."]</span></code></pre>
+    <table class="params">
+      <tr><th>Returns</th><th>Type</th><th>Description</th></tr>
+      <tr><td>accounts</td><td><code>string[]</code></td><td>Array with one address string</td></tr>
+    </table>
+
+    <h3 id="accounts">octra_accounts</h3>
+    <p>Returns currently connected accounts without prompting. Returns empty array if not connected.</p>
+    <pre><code><span class="keyword">const</span> accounts = <span class="keyword">await</span> window.octra.request({
+  method: <span class="string">'octra_accounts'</span>,
+});
+<span class="comment">// ["octAbc123..."] or []</span></code></pre>
+    <table class="params">
+      <tr><th>Returns</th><th>Type</th><th>Description</th></tr>
+      <tr><td>accounts</td><td><code>string[]</code></td><td>Array of connected addresses (empty if not connected)</td></tr>
+    </table>
+
+    <h3 id="disconnect">octra_disconnect</h3>
+    <p>Disconnects the Dapp from the wallet. Subsequent calls to <code>octra_accounts</code> will return an empty array.</p>
+
+    <!-- Balance methods -->
+    <h2>Balances</h2>
+
+    <h3 id="balance">octra_balance</h3>
+    <p>Returns the public (unencrypted) balance for the connected account.</p>
+    <pre><code><span class="keyword">const</span> result = <span class="keyword">await</span> window.octra.request({
+  method: <span class="string">'octra_balance'</span>,
+});
+<span class="comment">// { formatted: "1.500000", raw: "1500000" }</span></code></pre>
+    <table class="params">
+      <tr><th>Returns</th><th>Type</th><th>Description</th></tr>
+      <tr><td>formatted</td><td><code>string</code></td><td>Human-readable balance (e.g. "1.500000")</td></tr>
+      <tr><td>raw</td><td><code>string</code></td><td>Raw balance in smallest unit (microOCT)</td></tr>
+    </table>
+
+    <h3 id="encryptedBalance">octra_encryptedBalance</h3>
+    <p>Returns the encrypted (on-chain) private balance ciphertext. Requires the wallet to be unlocked.</p>
+    <pre><code><span class="keyword">const</span> result = <span class="keyword">await</span> window.octra.request({
+  method: <span class="string">'octra_encryptedBalance'</span>,
+});
+<span class="comment">// { cipher: "hfhe_v1|...", has_pvac_pubkey: true }</span></code></pre>
+    <table class="params">
+      <tr><th>Returns</th><th>Type</th><th>Description</th></tr>
+      <tr><td>cipher</td><td><code>string</code></td><td>HFHE v1 prefixed ciphertext (base64), or "0" if no balance</td></tr>
+      <tr><td>has_pvac_pubkey</td><td><code>boolean</code></td><td>Whether the account has a PVAC public key registered on-chain</td></tr>
+    </table>
+
+    <h3 id="decryptedBalance">octra_decryptedBalance</h3>
+    <p>Decrypts the private balance using PVAC keys and returns the human-readable value. This is an expensive operation — the wallet caches the result.</p>
+    <pre><code><span class="keyword">const</span> result = <span class="keyword">await</span> window.octra.request({
+  method: <span class="string">'octra_decryptedBalance'</span>,
+});
+<span class="comment">// { balance: "1000000" }</span></code></pre>
+    <table class="params">
+      <tr><th>Returns</th><th>Type</th><th>Description</th></tr>
+      <tr><td>balance</td><td><code>string</code></td><td>Decrypted balance as a string (microOCT)</td></tr>
+    </table>
+
+    <h3 id="tokens">octra_tokensByAddress</h3>
+    <p>Returns OCS-01 tokens held by the given address.</p>
+    <pre><code><span class="keyword">const</span> tokens = <span class="keyword">await</span> window.octra.request({
+  method: <span class="string">'octra_tokensByAddress'</span>,
+});
+<span class="comment">// [{ contract: "oct...", symbol: "wOCT", balance: "5000000" }]</span></code></pre>
+    <table class="params">
+      <tr><th>Returns</th><th>Type</th><th>Description</th></tr>
+      <tr><td>tokens</td><td><code>object[]</code></td><td>Array of token objects</td></tr>
+      <tr><td>tokens[].contract</td><td><code>string</code></td><td>Token contract address</td></tr>
+      <tr><td>tokens[].symbol</td><td><code>string</code></td><td>Token symbol</td></tr>
+      <tr><td>tokens[].balance</td><td><code>string</code></td><td>Token balance (raw)</td></tr>
+    </table>
+
+    <!-- Transaction methods -->
+    <h2>Transactions</h2>
+
+    <h3 id="sendTransaction">octra_sendTransaction</h3>
+    <p>Sends a public transaction. Opens an approval popup showing the recipient, amount, and fee.</p>
+    <pre><code><span class="keyword">const</span> result = <span class="keyword">await</span> window.octra.request({
+  method: <span class="string">'octra_sendTransaction'</span>,
+  params: [{
+    to: <span class="string">'octRecipient123...'</span>,
+    amount: <span class="string">'1.5'</span>,
+  }],
+});
+<span class="comment">// { hash: "abc123..." }</span></code></pre>
+    <table class="params">
+      <tr><th>Param</th><th>Type</th><th>Description</th></tr>
+      <tr><td>to <span class="required">required</span></td><td><code>string</code></td><td>Recipient address</td></tr>
+      <tr><td>amount <span class="required">required</span></td><td><code>string</code></td><td>Amount in OCT (human-readable, e.g. "1.5")</td></tr>
+      <tr><td>fee</td><td><code>string</code></td><td>Custom fee override</td></tr>
+    </table>
+    <table class="params">
+      <tr><th>Returns</th><th>Type</th><th>Description</th></tr>
+      <tr><td>hash</td><td><code>string</code></td><td>Transaction hash</td></tr>
+    </table>
+
+    <h3 id="signMessage">octra_signMessage</h3>
+    <p>Signs an arbitrary message with the wallet's ed25519 key. Opens an approval popup.</p>
+    <pre><code><span class="keyword">const</span> result = <span class="keyword">await</span> window.octra.request({
+  method: <span class="string">'octra_signMessage'</span>,
+  params: [<span class="string">'Hello, Octra!'</span>],
+});
+<span class="comment">// { signature: "base64..." }</span></code></pre>
+    <table class="params">
+      <tr><th>Returns</th><th>Type</th><th>Description</th></tr>
+      <tr><td>signature</td><td><code>string</code></td><td>Base64-encoded ed25519 signature</td></tr>
+    </table>
+
+    <h3 id="contractCall">octra_contractCall</h3>
+    <p>Calls a smart contract method on-chain. Opens an approval popup.</p>
+    <pre><code><span class="keyword">const</span> result = <span class="keyword">await</span> window.octra.request({
+  method: <span class="string">'octra_contractCall'</span>,
+  params: [{
+    contract: <span class="string">'octContractAddr...'</span>,
+    method: <span class="string">'transfer'</span>,
+    params: [<span class="string">'octRecipient...'</span>, <span class="number">1000000</span>],
+  }],
+});</code></pre>
+    <table class="params">
+      <tr><th>Param</th><th>Type</th><th>Description</th></tr>
+      <tr><td>contract <span class="required">required</span></td><td><code>string</code></td><td>Contract address</td></tr>
+      <tr><td>method <span class="required">required</span></td><td><code>string</code></td><td>Method name to call</td></tr>
+      <tr><td>params</td><td><code>any[]</code></td><td>Method arguments</td></tr>
+    </table>
+    <table class="params">
+      <tr><th>Returns</th><th>Type</th><th>Description</th></tr>
+      <tr><td>result</td><td><code>object</code></td><td>Contract call result (shape depends on the contract)</td></tr>
+    </table>
+
+    <!-- PVAC methods -->
+    <h2>Privacy (PVAC)</h2>
+    <p>PVAC (Pedersen Verifiable Arithmetic Commitments) is the privacy primitive used by Octra. These methods let Dapps work with encrypted values, generate commitments and proofs — all handled by the wallet's crypto layer.</p>
+
+    <h3 id="pvac_encrypt">octra_pvac_encrypt</h3>
+    <p>Encrypts a plaintext value into a PVAC ciphertext. Uses the wallet's PVAC public key.</p>
+    <pre><code><span class="keyword">const</span> result = <span class="keyword">await</span> window.octra.request({
+  method: <span class="string">'octra_pvac_encrypt'</span>,
+  params: [{ value: <span class="number">1000000</span> }],
+});
+<span class="comment">// { ciphertext: "hfhe_v1|base64..." }</span></code></pre>
+    <table class="params">
+      <tr><th>Param</th><th>Type</th><th>Description</th></tr>
+      <tr><td>value <span class="required">required</span></td><td><code>number</code></td><td>Plaintext value (in smallest unit)</td></tr>
+    </table>
+    <table class="params">
+      <tr><th>Returns</th><th>Type</th><th>Description</th></tr>
+      <tr><td>ciphertext</td><td><code>string</code></td><td>HFHE v1 prefixed PVAC ciphertext</td></tr>
+    </table>
+
+    <h3 id="pvac_encryptProve">octra_pvac_encryptProve</h3>
+    <p>Encrypts a value and generates a Pedersen commitment + bound zero proof in a single approved operation. Optionally includes a range proof. Routed through the accelerator when available.</p>
+    <pre><code><span class="keyword">const</span> result = <span class="keyword">await</span> window.octra.request({
+  method: <span class="string">'octra_pvac_encryptProve'</span>,
+  params: [{ value: <span class="number">1000000</span>, rangeProof: <span class="keyword">true</span> }],
+});
+<span class="comment">// { ciphertext, amount_commitment, zero_proof, blinding, range_proof? }</span></code></pre>
+    <table class="params">
+      <tr><th>Param</th><th>Type</th><th>Description</th></tr>
+      <tr><td>value <span class="required">required</span></td><td><code>number</code></td><td>Plaintext value (in smallest unit)</td></tr>
+      <tr><td>rangeProof</td><td><code>boolean</code></td><td>If true, also generates a range proof on the ciphertext</td></tr>
+    </table>
+    <table class="params">
+      <tr><th>Returns</th><th>Type</th><th>Description</th></tr>
+      <tr><td>ciphertext</td><td><code>string</code></td><td>HFHE v1 prefixed PVAC ciphertext</td></tr>
+      <tr><td>amount_commitment</td><td><code>string</code></td><td>Base64 Pedersen commitment to the value</td></tr>
+      <tr><td>zero_proof</td><td><code>string</code></td><td>Base64 bound zero proof</td></tr>
+      <tr><td>blinding</td><td><code>string</code></td><td>Base64 blinding factor (for commitment verification)</td></tr>
+      <tr><td>range_proof</td><td><code>string</code></td><td>Base64 range proof (only if rangeProof=true)</td></tr>
+    </table>
+
+    <h3 id="pvac_decrypt">octra_pvac_decrypt</h3>
+    <p>Decrypts a PVAC ciphertext back to its plaintext value. Requires wallet unlock and user approval.</p>
+    <pre><code><span class="keyword">const</span> result = <span class="keyword">await</span> window.octra.request({
+  method: <span class="string">'octra_pvac_decrypt'</span>,
+  params: [{ ciphertext: <span class="string">'base64...'</span> }],
+});
+<span class="comment">// { value: 1000000 }</span></code></pre>
+    <table class="params">
+      <tr><th>Param</th><th>Type</th><th>Description</th></tr>
+      <tr><td>ciphertext <span class="required">required</span></td><td><code>string</code></td><td>Base64-encoded PVAC ciphertext to decrypt</td></tr>
+    </table>
+    <table class="params">
+      <tr><th>Returns</th><th>Type</th><th>Description</th></tr>
+      <tr><td>value</td><td><code>number</code></td><td>Decrypted plaintext value</td></tr>
+    </table>
+
+    <h3 id="pvac_commit">octra_pvac_commit</h3>
+    <p>Creates a Pedersen commitment to a value with a random blinding factor. Used by the faucet and other protocols to prove wallet ownership without revealing the value.</p>
+    <pre><code><span class="keyword">const</span> result = <span class="keyword">await</span> window.octra.request({
+  method: <span class="string">'octra_pvac_commit'</span>,
+  params: [{ value: <span class="number">3000000</span> }],
+});
+<span class="comment">// { commitment: "base64..." }</span></code></pre>
+    <table class="params">
+      <tr><th>Param</th><th>Type</th><th>Description</th></tr>
+      <tr><td>value <span class="required">required</span></td><td><code>number</code></td><td>Value to commit to (in smallest unit)</td></tr>
+    </table>
+    <table class="params">
+      <tr><th>Returns</th><th>Type</th><th>Description</th></tr>
+      <tr><td>commitment</td><td><code>string</code></td><td>Base64-encoded Pedersen commitment</td></tr>
+    </table>
+
+    <h3 id="pvac_rangeProof">octra_pvac_rangeProof</h3>
+    <p>Generates a zero-knowledge range proof that a ciphertext encrypts a specific non-negative value. Required for shield/unshield operations.</p>
+    <pre><code><span class="keyword">const</span> result = <span class="keyword">await</span> window.octra.request({
+  method: <span class="string">'octra_pvac_rangeProof'</span>,
+  params: [{
+    ciphertext: <span class="string">'base64...'</span>,
+    value: <span class="number">1000000</span>,
+  }],
+});
+<span class="comment">// { proof: "rp_v1|base64..." }</span></code></pre>
+    <table class="params">
+      <tr><th>Param</th><th>Type</th><th>Description</th></tr>
+      <tr><td>ciphertext <span class="required">required</span></td><td><code>string</code></td><td>Base64-encoded PVAC ciphertext</td></tr>
+      <tr><td>value <span class="required">required</span></td><td><code>number</code></td><td>The value the ciphertext is expected to encrypt</td></tr>
+    </table>
+    <table class="params">
+      <tr><th>Returns</th><th>Type</th><th>Description</th></tr>
+      <tr><td>proof</td><td><code>string</code></td><td>Prefixed base64 range proof</td></tr>
+    </table>
+
+    <h2>Homomorphic Arithmetic</h2>
+    <p>Raw arithmetic on encrypted ciphertexts. No user approval required — these are fast WASM operations. Ciphertexts passed as arguments should be raw base64 (strip the <code>hfhe_v1|</code> prefix first).</p>
+
+    <h3 id="pvac_ctAdd">octra_pvac_ctAdd</h3>
+    <p>Add two ciphertexts: <code>result = a + b</code></p>
+    <pre><code><span class="keyword">const</span> result = <span class="keyword">await</span> window.octra.request({
+  method: <span class="string">'octra_pvac_ctAdd'</span>,
+  params: [{ a: <span class="string">'base64...'</span>, b: <span class="string">'base64...'</span> }],
+});
+<span class="comment">// { ciphertext: "base64..." }</span></code></pre>
+    <table class="params">
+      <tr><th>Param</th><th>Type</th><th>Description</th></tr>
+      <tr><td>a <span class="required">required</span></td><td><code>string</code></td><td>Base64 ciphertext A (raw, no prefix)</td></tr>
+      <tr><td>b <span class="required">required</span></td><td><code>string</code></td><td>Base64 ciphertext B (raw, no prefix)</td></tr>
+    </table>
+    <table class="params">
+      <tr><th>Returns</th><th>Type</th><th>Description</th></tr>
+      <tr><td>ciphertext</td><td><code>string</code></td><td>Base64 result ciphertext</td></tr>
+    </table>
+
+    <h3 id="pvac_ctSub">octra_pvac_ctSub</h3>
+    <p>Subtract two ciphertexts: <code>result = a - b</code></p>
+    <pre><code><span class="keyword">const</span> result = <span class="keyword">await</span> window.octra.request({
+  method: <span class="string">'octra_pvac_ctSub'</span>,
+  params: [{ a: <span class="string">'base64...'</span>, b: <span class="string">'base64...'</span> }],
+});
+<span class="comment">// { ciphertext: "base64..." }</span></code></pre>
+    <table class="params">
+      <tr><th>Param</th><th>Type</th><th>Description</th></tr>
+      <tr><td>a <span class="required">required</span></td><td><code>string</code></td><td>Base64 ciphertext A (raw, no prefix)</td></tr>
+      <tr><td>b <span class="required">required</span></td><td><code>string</code></td><td>Base64 ciphertext B (raw, no prefix)</td></tr>
+    </table>
+    <table class="params">
+      <tr><th>Returns</th><th>Type</th><th>Description</th></tr>
+      <tr><td>ciphertext</td><td><code>string</code></td><td>Base64 result ciphertext</td></tr>
+    </table>
+
+    <h3 id="pvac_ctMul">octra_pvac_ctMul</h3>
+    <p>Multiply two ciphertexts: <code>result = a * b</code></p>
+    <pre><code><span class="keyword">const</span> result = <span class="keyword">await</span> window.octra.request({
+  method: <span class="string">'octra_pvac_ctMul'</span>,
+  params: [{ a: <span class="string">'base64...'</span>, b: <span class="string">'base64...'</span> }],
+});
+<span class="comment">// { ciphertext: "base64..." }</span></code></pre>
+    <table class="params">
+      <tr><th>Param</th><th>Type</th><th>Description</th></tr>
+      <tr><td>a <span class="required">required</span></td><td><code>string</code></td><td>Base64 ciphertext A (raw, no prefix)</td></tr>
+      <tr><td>b <span class="required">required</span></td><td><code>string</code></td><td>Base64 ciphertext B (raw, no prefix)</td></tr>
+    </table>
+    <table class="params">
+      <tr><th>Returns</th><th>Type</th><th>Description</th></tr>
+      <tr><td>ciphertext</td><td><code>string</code></td><td>Base64 result ciphertext</td></tr>
+    </table>
+
+    <h3 id="pvac_ctAddConst">octra_pvac_ctAddConst</h3>
+    <p>Add a plaintext constant to a ciphertext: <code>result = ct + k</code></p>
+    <pre><code><span class="keyword">const</span> result = <span class="keyword">await</span> window.octra.request({
+  method: <span class="string">'octra_pvac_ctAddConst'</span>,
+  params: [{ ciphertext: <span class="string">'base64...'</span>, value: <span class="number">100</span> }],
+});
+<span class="comment">// { ciphertext: "base64..." }</span></code></pre>
+    <table class="params">
+      <tr><th>Param</th><th>Type</th><th>Description</th></tr>
+      <tr><td>ciphertext <span class="required">required</span></td><td><code>string</code></td><td>Base64 ciphertext (raw, no prefix)</td></tr>
+      <tr><td>value <span class="required">required</span></td><td><code>number</code></td><td>Plaintext constant to add</td></tr>
+    </table>
+    <table class="params">
+      <tr><th>Returns</th><th>Type</th><th>Description</th></tr>
+      <tr><td>ciphertext</td><td><code>string</code></td><td>Base64 result ciphertext</td></tr>
+    </table>
+
+    <h3 id="pvac_ctSubConst">octra_pvac_ctSubConst</h3>
+    <p>Subtract a plaintext constant from a ciphertext: <code>result = ct - k</code></p>
+    <pre><code><span class="keyword">const</span> result = <span class="keyword">await</span> window.octra.request({
+  method: <span class="string">'octra_pvac_ctSubConst'</span>,
+  params: [{ ciphertext: <span class="string">'base64...'</span>, value: <span class="number">50</span> }],
+});
+<span class="comment">// { ciphertext: "base64..." }</span></code></pre>
+    <table class="params">
+      <tr><th>Param</th><th>Type</th><th>Description</th></tr>
+      <tr><td>ciphertext <span class="required">required</span></td><td><code>string</code></td><td>Base64 ciphertext (raw, no prefix)</td></tr>
+      <tr><td>value <span class="required">required</span></td><td><code>number</code></td><td>Plaintext constant to subtract</td></tr>
+    </table>
+    <table class="params">
+      <tr><th>Returns</th><th>Type</th><th>Description</th></tr>
+      <tr><td>ciphertext</td><td><code>string</code></td><td>Base64 result ciphertext</td></tr>
+    </table>
+
+    <!-- Stealth -->
+    <h2>Stealth Transfers</h2>
+
+    <h3 id="stealth_send">octra_stealth_send</h3>
+    <p>Sends a private (stealth) transfer to another account. The amount is encrypted on-chain — only the sender and recipient can see it. The recipient discovers the payment by scanning for stealth-tagged outputs.</p>
+    <pre><code><span class="keyword">const</span> result = <span class="keyword">await</span> window.octra.request({
+  method: <span class="string">'octra_stealth_send'</span>,
+  params: [{
+    to: <span class="string">'octRecipient...'</span>,
+    amount: <span class="string">'100'</span>,
+  }],
+});
+<span class="comment">// { jobId: "uuid..." }</span></code></pre>
+    <p>Stealth sends are bucketed — the amount must be one of: 1, 10, 100, 1000, 10000, 100000, 1000000 OCT.</p>
+    <table class="params">
+      <tr><th>Param</th><th>Type</th><th>Description</th></tr>
+      <tr><td>to <span class="required">required</span></td><td><code>string</code></td><td>Recipient address</td></tr>
+      <tr><td>amount <span class="required">required</span></td><td><code>string</code></td><td>Amount in OCT (must be a bucket value)</td></tr>
+    </table>
+    <table class="params">
+      <tr><th>Returns</th><th>Type</th><th>Description</th></tr>
+      <tr><td>jobId</td><td><code>string</code></td><td>Job ID to track the stealth send progress</td></tr>
+    </table>
+
+    <h3 id="pvac_stealthTransfer">octra_pvac_stealthTransfer</h3>
+    <p>Encrypts a transfer amount, homomorphically subtracts it from the sender's encrypted balance, and generates range proofs on both the delta and new balance — all in a single approved operation. Used by dApps implementing custom encrypted tokens.</p>
+    <pre><code><span class="keyword">const</span> result = <span class="keyword">await</span> window.octra.request({
+  method: <span class="string">'octra_pvac_stealthTransfer'</span>,
+  params: [{
+    balance: <span class="string">'base64...'</span>,   <span class="comment">// sender's encrypted balance (raw, no prefix)</span>
+    amount: <span class="number">100</span>,            <span class="comment">// amount to transfer</span>
+    balanceValue: <span class="number">1000</span>,     <span class="comment">// sender's known plaintext balance</span>
+  }],
+});
+<span class="comment">// { ciphertext, amount_commitment, zero_proof, blinding,</span>
+<span class="comment">//   new_balance, range_proof_delta, range_proof_balance, new_balance_value }</span></code></pre>
+    <table class="params">
+      <tr><th>Param</th><th>Type</th><th>Description</th></tr>
+      <tr><td>balance <span class="required">required</span></td><td><code>string</code></td><td>Sender's encrypted balance (raw base64, no hfhe_v1| prefix)</td></tr>
+      <tr><td>amount <span class="required">required</span></td><td><code>number</code></td><td>Amount to transfer (plaintext)</td></tr>
+      <tr><td>balanceValue <span class="required">required</span></td><td><code>number</code></td><td>Sender's known plaintext balance (for range proof)</td></tr>
+    </table>
+    <table class="params">
+      <tr><th>Returns</th><th>Type</th><th>Description</th></tr>
+      <tr><td>ciphertext</td><td><code>string</code></td><td>HFHE v1 prefixed delta ciphertext</td></tr>
+      <tr><td>amount_commitment</td><td><code>string</code></td><td>Pedersen commitment to the transfer amount</td></tr>
+      <tr><td>zero_proof</td><td><code>string</code></td><td>Bound zero proof for the delta</td></tr>
+      <tr><td>blinding</td><td><code>string</code></td><td>Blinding factor for the commitment</td></tr>
+      <tr><td>new_balance</td><td><code>string</code></td><td>Base64 new encrypted balance ciphertext</td></tr>
+      <tr><td>range_proof_delta</td><td><code>string</code></td><td>Range proof on the delta ciphertext</td></tr>
+      <tr><td>range_proof_balance</td><td><code>string</code></td><td>Range proof on the new balance ciphertext</td></tr>
+      <tr><td>new_balance_value</td><td><code>number</code></td><td>New plaintext balance (for local tracking)</td></tr>
+    </table>
+
+    <!-- Network -->
+    <h2>Network</h2>
+
+    <h3 id="networkInfo">octra_getNetworkInfo</h3>
+    <p>Returns the current network configuration (mainnet vs devnet, RPC URL).</p>
+    <pre><code><span class="keyword">const</span> info = <span class="keyword">await</span> window.octra.request({
+  method: <span class="string">'octra_getNetworkInfo'</span>,
+});
+<span class="comment">// { name: "mainnet", chainId: "octra-mainnet-1", rpcUrl: "https://octra.network/rpc" }</span></code></pre>
+    <table class="params">
+      <tr><th>Returns</th><th>Type</th><th>Description</th></tr>
+      <tr><td>name</td><td><code>string</code></td><td>Network name ("mainnet" or "devnet")</td></tr>
+      <tr><td>chainId</td><td><code>string</code></td><td>Chain identifier</td></tr>
+      <tr><td>rpcUrl</td><td><code>string</code></td><td>Current RPC endpoint URL</td></tr>
+    </table>
+  </div>
+
+  <script>
+    // Sidebar active link tracking on scroll
+    const links = document.querySelectorAll('.sidebar-link');
+    const sections = [];
+    links.forEach(link => {
+      const id = link.getAttribute('href')?.slice(1);
+      if (id) {
+        const el = document.getElementById(id);
+        if (sections) sections.push({ el, link });
+      }
+    });
+    window.addEventListener('scroll', () => {
+      let current = sections[0];
+      for (const s of sections) {
+        if (s.el && s.el.getBoundingClientRect().top <= 100) current = s;
+      }
+      links.forEach(l => l.classList.remove('active'));
+      if (current) current.link.classList.add('active');
+    });
+  </script>
+</body>
+</html>

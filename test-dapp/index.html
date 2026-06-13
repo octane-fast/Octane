@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Octane Wallet Test dApp</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, system-ui, sans-serif; background: #0f172a; color: #e2e8f0; padding: 40px; }
+    h1 { margin-bottom: 8px; }
+    .subtitle { color: #64748b; margin-bottom: 32px; }
+    .tabs { display: flex; gap: 4px; margin-bottom: 24px; }
+    .tab { padding: 8px 16px; border-radius: 6px; background: #1e293b; color: #94a3b8; cursor: pointer; font-size: 13px; font-weight: 600; border: 1px solid #334155; }
+    .tab.active { background: #6366f1; color: #fff; border-color: #6366f1; }
+    .panel { display: none; }
+    .panel.active { display: block; }
+    .card { background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 20px; margin-bottom: 16px; }
+    .card h3 { margin-bottom: 12px; color: #94a3b8; font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px; }
+    button { background: #6366f1; color: #fff; border: none; border-radius: 8px; padding: 10px 18px; font-size: 14px; font-weight: 600; cursor: pointer; margin-right: 8px; margin-bottom: 8px; }
+    button:hover { background: #4f46e5; }
+    button:disabled { opacity: 0.4; cursor: not-allowed; }
+    button.secondary { background: #334155; }
+    button.secondary:hover { background: #475569; }
+    .status { margin-top: 12px; padding: 10px; background: #0f172a; border-radius: 6px; font-family: monospace; font-size: 13px; white-space: pre-wrap; word-break: break-all; min-height: 40px; color: #cbd5e1; }
+    .status.error { color: #f87171; }
+    .status.success { color: #34d399; }
+    input { background: #0f172a; border: 1px solid #475569; border-radius: 6px; padding: 8px 12px; color: #e2e8f0; font-size: 14px; width: 100%; margin-bottom: 8px; }
+    label { display: block; color: #94a3b8; font-size: 12px; margin-bottom: 4px; }
+    .row { display: flex; gap: 12px; align-items: flex-end; }
+    .row > div { flex: 1; }
+    #provider-status { font-size: 14px; margin-bottom: 24px; padding: 12px; border-radius: 8px; }
+    #provider-status.found { background: #064e3b; border: 1px solid #059669; }
+    #provider-status.missing { background: #450a0a; border: 1px solid #dc2626; }
+  </style>
+</head>
+<body>
+  <h1>Octane Wallet Test dApp</h1>
+  <p class="subtitle">Test RFC-O-1 provider + @0xio/sdk integration</p>
+
+  <div id="provider-status"></div>
+
+  <div class="tabs">
+    <div class="tab active" data-panel="direct">Direct (window.octra)</div>
+    <div class="tab" data-panel="sdk">@0xio/sdk</div>
+  </div>
+
+  <!-- Direct panel -->
+  <div class="panel active" id="panel-direct">
+    <div class="card">
+      <h3>1. Connection</h3>
+      <button id="btn-connect">Connect Wallet</button>
+      <button id="btn-balance" class="secondary" disabled>Get Balance</button>
+      <div class="status" id="status-connect">Not connected</div>
+    </div>
+    <div class="card">
+      <h3>2. Sign Message</h3>
+      <label for="sign-input">Message:</label>
+      <input id="sign-input" type="text" value="Hello from test dApp!">
+      <button id="btn-sign" disabled>Sign Message</button>
+      <div class="status" id="status-sign"></div>
+    </div>
+    <div class="card">
+      <h3>3. Send Transaction</h3>
+      <div class="row">
+        <div><label for="tx-to">To:</label><input id="tx-to" type="text" placeholder="oct..."></div>
+        <div><label for="tx-amount">Amount:</label><input id="tx-amount" type="text" value="0.001"></div>
+      </div>
+      <button id="btn-send" disabled>Send Transaction</button>
+      <div class="status" id="status-send"></div>
+    </div>
+  </div>
+
+  <!-- SDK panel -->
+  <div class="panel" id="panel-sdk">
+    <div class="card">
+      <h3>1. Initialize + Connect (@0xio/sdk)</h3>
+      <button id="sdk-init">Initialize SDK</button>
+      <button id="sdk-connect" disabled>Connect</button>
+      <button id="sdk-balance" class="secondary" disabled>Get Balance</button>
+      <div class="status" id="sdk-status">Not initialized</div>
+    </div>
+    <div class="card">
+      <h3>2. Sign Message (SDK)</h3>
+      <label for="sdk-sign-input">Message:</label>
+      <input id="sdk-sign-input" type="text" value="SDK sign test">
+      <button id="sdk-sign" disabled>Sign via SDK</button>
+      <div class="status" id="sdk-sign-status"></div>
+    </div>
+    <div class="card">
+      <h3>3. Send Transaction (SDK)</h3>
+      <div class="row">
+        <div><label for="sdk-tx-to">To:</label><input id="sdk-tx-to" type="text" placeholder="oct..."></div>
+        <div><label for="sdk-tx-amount">Amount:</label><input id="sdk-tx-amount" type="text" value="0.001"></div>
+      </div>
+      <button id="sdk-send" disabled>Send via SDK</button>
+      <div class="status" id="sdk-send-status"></div>
+    </div>
+  </div>
+
+  <script type="module">
+    // --- Tab switching ---
+    document.querySelectorAll('.tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+        tab.classList.add('active');
+        document.getElementById('panel-' + tab.dataset.panel).classList.add('active');
+      });
+    });
+
+    const $ = (sel) => document.getElementById(sel);
+
+    // --- Provider detection ---
+    function checkProvider() {
+      const el = $('provider-status');
+      if (window.octra && window.octra.isOctra) {
+        el.textContent = '✓ window.octra provider detected (isOctra=true)';
+        el.className = 'found';
+      } else {
+        el.textContent = '✗ window.octra not found — extension not injecting provider';
+        el.className = 'missing';
+      }
+    }
+    checkProvider();
+    setTimeout(checkProvider, 500);
+    setTimeout(checkProvider, 2000);
+    window.addEventListener('octraWalletReady', checkProvider);
+
+    // --- Direct protocol ---
+    let connectedAddress = null;
+
+    $('btn-connect').onclick = async () => {
+      const s = $('status-connect');
+      try {
+        s.textContent = 'Requesting...'; s.className = 'status';
+        const res = await window.octra.request({ method: 'octra_requestAccounts' });
+        if (Array.isArray(res) && res.length > 0) {
+          connectedAddress = res[0];
+          s.textContent = `Connected: ${connectedAddress}`; s.className = 'status success';
+          $('btn-balance').disabled = false; $('btn-sign').disabled = false; $('btn-send').disabled = false;
+          $('tx-to').value = connectedAddress;
+        } else if (res?.error) {
+          s.textContent = `Rejected: ${res.error}`; s.className = 'status error';
+        } else {
+          s.textContent = `Response: ${JSON.stringify(res)}`; s.className = 'status error';
+        }
+      } catch (e) { s.textContent = `Error: ${e.message}`; s.className = 'status error'; }
+    };
+
+    $('btn-balance').onclick = async () => {
+      const s = $('status-connect');
+      try {
+        const bal = await window.octra.request({ method: 'octra_getBalance' });
+        s.textContent = `Connected: ${connectedAddress}\n${JSON.stringify(bal, null, 2)}`; s.className = 'status success';
+      } catch (e) { s.textContent = `Error: ${e.message}`; s.className = 'status error'; }
+    };
+
+    $('btn-sign').onclick = async () => {
+      const s = $('status-sign');
+      try {
+        s.textContent = 'Requesting...'; s.className = 'status';
+        const sig = await window.octra.request({ method: 'octra_signMessage', params: [$('sign-input').value] });
+        if (sig?.error) { s.textContent = sig.error; s.className = 'status error'; }
+        else { s.textContent = `Signature: ${sig}`; s.className = 'status success'; }
+      } catch (e) { s.textContent = `Error: ${e.message}`; s.className = 'status error'; }
+    };
+
+    $('btn-send').onclick = async () => {
+      const s = $('status-send');
+      try {
+        s.textContent = 'Requesting...'; s.className = 'status';
+        const res = await window.octra.request({ method: 'octra_sendTransaction', params: [{ to: $('tx-to').value, amount: parseFloat($('tx-amount').value) }] });
+        if (res?.error) { s.textContent = res.error; s.className = 'status error'; }
+        else { s.textContent = `TX: ${res.txHash}`; s.className = 'status success'; }
+      } catch (e) { s.textContent = `Error: ${e.message}`; s.className = 'status error'; }
+    };
+
+    // --- @0xio/sdk protocol ---
+    import { ZeroXIOWallet, detectWalletAdapter } from './node_modules/@0xio/sdk/dist/index.esm.js';
+
+    let sdkWallet = null;
+
+    $('sdk-init').onclick = async () => {
+      const s = $('sdk-status');
+      try {
+        s.textContent = 'Detecting adapter...'; s.className = 'status';
+        const adapter = detectWalletAdapter();
+        if (!adapter) {
+          s.textContent = 'No adapter detected!\n\ndetectWalletAdapter() returned null.\nwindow.octra = ' + JSON.stringify(!!window.octra) + '\nwindow.octra.isOctra = ' + JSON.stringify(window.octra?.isOctra);
+          s.className = 'status error';
+          return;
+        }
+        s.textContent = `Adapter found: ${adapter.name} (${adapter.displayName})\nInitializing...`;
+        sdkWallet = new ZeroXIOWallet({ appName: 'Octane Test', adapter });
+        const ready = await sdkWallet.initialize();
+        if (ready) {
+          s.textContent = `SDK initialized ✓ (adapter: ${adapter.name})`; s.className = 'status success';
+          $('sdk-connect').disabled = false;
+        } else {
+          s.textContent = 'SDK initialize() returned false'; s.className = 'status error';
+        }
+      } catch (e) { s.textContent = `Error: ${e.message}\n${e.stack || ''}`; s.className = 'status error'; }
+    };
+
+    $('sdk-connect').onclick = async () => {
+      const s = $('sdk-status');
+      try {
+        s.textContent = 'Connecting...'; s.className = 'status';
+        const res = await sdkWallet.connect({ requestPermissions: ['read_balance', 'send_transactions', 'sign_messages'] });
+        s.textContent = `Connected: ${res.address}\n${JSON.stringify(res, null, 2)}`; s.className = 'status success';
+        $('sdk-balance').disabled = false; $('sdk-sign').disabled = false; $('sdk-send').disabled = false;
+        $('sdk-tx-to').value = res.address;
+      } catch (e) { s.textContent = `Error: ${e.message}`; s.className = 'status error'; }
+    };
+
+    $('sdk-balance').onclick = async () => {
+      const s = $('sdk-status');
+      try {
+        const bal = await sdkWallet.getBalance(true);
+        s.textContent = `Balance: ${JSON.stringify(bal, null, 2)}`; s.className = 'status success';
+      } catch (e) { s.textContent = `Error: ${e.message}`; s.className = 'status error'; }
+    };
+
+    $('sdk-sign').onclick = async () => {
+      const s = $('sdk-sign-status');
+      try {
+        s.textContent = 'Requesting...'; s.className = 'status';
+        const sig = await sdkWallet.signMessage($('sdk-sign-input').value);
+        s.textContent = `Signature: ${sig}`; s.className = 'status success';
+      } catch (e) { s.textContent = `Error: ${e.message}`; s.className = 'status error'; }
+    };
+
+    $('sdk-send').onclick = async () => {
+      const s = $('sdk-send-status');
+      try {
+        s.textContent = 'Requesting...'; s.className = 'status';
+        const res = await sdkWallet.sendTransaction({ to: $('sdk-tx-to').value, amount: parseFloat($('sdk-tx-amount').value) });
+        s.textContent = `TX: ${JSON.stringify(res, null, 2)}`; s.className = 'status success';
+      } catch (e) { s.textContent = `Error: ${e.message}`; s.className = 'status error'; }
+    };
+  </script>
+</body>
+</html>

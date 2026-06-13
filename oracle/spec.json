@@ -1,0 +1,19 @@
+{
+  "sources": [
+    {
+      "url": "https://api.coingecko.com/api/v3/simple/price?ids=octra&vs_currencies=usd",
+      "resultQuery": "octra.usd"
+    },
+    {
+      "url": "https://api.coinmarketcap.com/data-api/v3/cryptocurrency/detail?slug=octra",
+      "resultQuery": "data.statistics.price"
+    },
+    {
+      "url": "https://api.dexscreener.com/latest/dex/pairs/ethereum/0x5eb459d3fc44f3f412ef43f93fa1e44ecb4ca9cb62a16bcbd94b5d0b834ff854",
+      "resultQuery": "to_number(pair.priceUsd)"
+    }
+  ],
+  "aggregation": "median",
+  "domain": "octusd-price-v1",
+  "scale": 1000000
+}

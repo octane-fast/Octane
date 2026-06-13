@@ -1,0 +1,25 @@
+{
+  "name": "octra-wallet",
+  "version": "2.3.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite build --watch",
+    "build": "vite build",
+    "mock-rpc": "tsx mock-rpc/server.ts",
+    "package": "vite build && cd .. && zip -r octane-wallet.zip extension/dist extension/icons extension/manifest.json extension/offscreen.html -x '*.DS_Store'"
+  },
+  "dependencies": {
+    "@noble/curves": "^2.2.0",
+    "@noble/ed25519": "^2.1.0",
+    "@noble/hashes": "^1.4.0",
+    "@scure/bip39": "^1.3.0"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.1.42",
+    "canvas": "^3.2.3",
+    "tsx": "^4.22.3",
+    "typescript": "^5.4.0",
+    "vite": "^5.4.0"
+  }
+}
