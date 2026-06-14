@@ -1,6 +1,7 @@
 import {
   APPROVAL_CONNECT, APPROVAL_SIGN_MESSAGE, APPROVAL_SEND_TX,
   APPROVAL_CALL_CONTRACT, APPROVAL_PVAC_DECRYPT, APPROVAL_PVAC_PROVE,
+  APPROVAL_ZKTLS_PROVE,
 } from './constants';
 
 export type ApprovalType =
@@ -9,7 +10,8 @@ export type ApprovalType =
   | typeof APPROVAL_SEND_TX
   | typeof APPROVAL_CALL_CONTRACT
   | typeof APPROVAL_PVAC_DECRYPT
-  | typeof APPROVAL_PVAC_PROVE;
+  | typeof APPROVAL_PVAC_PROVE
+  | typeof APPROVAL_ZKTLS_PROVE;
 
 export interface Wallet {
   address: string;

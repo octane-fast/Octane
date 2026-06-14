@@ -175,6 +175,20 @@
       <button id="btn-stealth-transfer">Encrypt &amp; Transfer</button>
       <div id="et-result" class="result" style="display:none"></div>
     </div>
+
+    <div class="card">
+      <h2>11. zkTLS Proof (Jolt)</h2>
+      <p>Record a TLS session and generate a zero-knowledge proof of the response using the Octane Accelerator (Jolt zkVM). The prover runs locally — no data leaves your machine.</p>
+      <label>URL</label>
+      <input type="text" id="zktls-url" placeholder="https://api.github.com/zen" value="https://api.github.com/zen">
+      <label>Custom Headers (JSON, optional)</label>
+      <input type="text" id="zktls-headers" placeholder='{"Accept": "application/json"}'>
+      <div class="actions">
+        <button id="btn-zktls">Prove TLS Session</button>
+      </div>
+      <div id="zktls-status" style="font-size:12px;color:#a1a1aa;margin-top:8px;"></div>
+      <div id="zktls-result" class="result" style="display:none"></div>
+    </div>
   </div>
 
   <script>
@@ -302,6 +316,38 @@
         const res = await call('octra_pvac_stealthTransfer', [{ balance, amount, balanceValue }]);
         showResult('et-result', res);
       } catch (e) { showResult('et-result', e.message, true); }
+    });
+
+    document.getElementById('btn-zktls').addEventListener('click', async () => {
+      const url = document.getElementById('zktls-url').value.trim();
+      if (!url) { showResult('zktls-result', 'Enter a URL', true); return; }
+      let headers;
+      const hStr = document.getElementById('zktls-headers').value.trim();
+      if (hStr) {
+        try { headers = JSON.parse(hStr); } catch { showResult('zktls-result', 'Headers must be valid JSON', true); return; }
+      }
+      const btn = document.getElementById('btn-zktls');
+      const status = document.getElementById('zktls-status');
+      btn.disabled = true;
+      btn.textContent = 'Proving…';
+      status.textContent = '⏳ Recording TLS session and generating proof (~90s)…';
+      status.style.color = '#facc15';
+      showResult('zktls-result', 'Recording TLS session, then proving with Jolt zkVM…\nThis takes ~90 seconds for 3 handshake records.\n', false);
+      try {
+        const start = Date.now();
+        const res = await call('octra_requestZktlsProofJolt', [{ url, headers }]);
+        const elapsed = ((Date.now() - start) / 1000).toFixed(1);
+        status.textContent = `✅ Proof generated in ${elapsed}s`;
+        status.style.color = '#4ade80';
+        showResult('zktls-result', res);
+      } catch (e) {
+        status.textContent = '❌ Failed';
+        status.style.color = '#f87171';
+        showResult('zktls-result', e.message, true);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Prove TLS Session';
+      }
     });
 
     // Check if wallet is already connected

@@ -71,6 +71,7 @@ export const APPROVAL_SEND_TX = 'send_transaction' as const;
 export const APPROVAL_CALL_CONTRACT = 'call_contract' as const;
 export const APPROVAL_PVAC_DECRYPT = 'pvac_decrypt' as const;
 export const APPROVAL_PVAC_PROVE = 'pvac_prove' as const;
+export const APPROVAL_ZKTLS_PROVE = 'zktls_prove' as const;
 
 // ─── Message Types (internal chrome.runtime messages) ───────────────────────
 
@@ -112,6 +113,7 @@ export const MSG_GET_PROVER_STATUS = 'GET_PROVER_STATUS' as const;
 export const MSG_SET_PROVER_MODE = 'SET_PROVER_MODE' as const;
 export const MSG_FETCH_CIRCLE_ASSET = 'FETCH_CIRCLE_ASSET' as const;
 export const MSG_GET_NFT_CONTENT = 'GET_NFT_CONTENT' as const;
+export const MSG_ZKTLS_PROVE = 'ZKTLS_PROVE' as const;
 
 // ─── Offscreen Actions ──────────────────────────────────────────────────────
 

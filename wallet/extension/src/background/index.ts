@@ -25,7 +25,7 @@ import {
   POPUP_CONFIRM_WIDTH, POPUP_CONFIRM_HEIGHT,
   APPROVAL_TIMEOUT_MS,
   APPROVAL_CONNECT, APPROVAL_SIGN_MESSAGE, APPROVAL_SEND_TX,
-  APPROVAL_CALL_CONTRACT, APPROVAL_PVAC_DECRYPT, APPROVAL_PVAC_PROVE,
+  APPROVAL_CALL_CONTRACT, APPROVAL_PVAC_DECRYPT, APPROVAL_PVAC_PROVE, APPROVAL_ZKTLS_PROVE,
   MSG_APPROVAL_RESPONSE, MSG_UNLOCK, MSG_LOCK, MSG_SET_TOR,
   MSG_SET_RPC_URL, MSG_GET_RPC_URL, MSG_IS_UNLOCKED,
   MSG_SWITCH_ACCOUNT, MSG_GET_ACCOUNTS, MSG_ADD_ACCOUNT, MSG_GET_ADDRESS,
@@ -1180,6 +1180,44 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
                 try {
                   const { pkB64 } = await vault.requirePvacKeys();
                   sendResponse({ pubkey: pkB64 });
+                } catch (e) { sendResponse({ error: (e as Error).message }); }
+                break;
+              }
+
+              // ── zkTLS Proof (Jolt) ──────────────────────────────────
+              // Records a TLS session with the given URL, proves the decryption
+              // using the Jolt zkVM (via Octane Accelerator), and returns the
+              // plaintext application data.
+              if (dappMethod === 'octra_requestZktlsProofJolt' || dappMethod === 'requestZktlsProofJolt') {
+                if (!vault.isUnlocked()) {
+                  const unlocked = await ensureUnlocked();
+                  if (!unlocked) { sendResponse({ error: ERR_WALLET_LOCKED }); break; }
+                }
+                const [zktlsParams] = dappParams as [{ url: string; headers?: Record<string, string> }];
+                if (!zktlsParams?.url) { sendResponse({ error: 'Missing url parameter' }); break; }
+
+                const zktlsApproved = await requestUserApproval(
+                  APPROVAL_ZKTLS_PROVE,
+                  dappOrigin,
+                  {
+                    operation: 'Prove TLS session (Jolt zkVM)',
+                    detail: `URL: ${zktlsParams.url}`,
+                  }
+                );
+                if (!zktlsApproved) { sendResponse({ error: ERR_USER_REJECTED_REQUEST }); break; }
+
+                try {
+                  const result = await routeProof({
+                    operation: 'jolt_zktls_prove',
+                    payload: {
+                      operation: 'jolt_zktls_prove',
+                      url: zktlsParams.url,
+                      headers: JSON.stringify(zktlsParams.headers ?? {}),
+                    },
+                    onStatus: (step) => console.log('[zktls] %s', step),
+                  });
+                  if (!result) { sendResponse({ error: 'All provers failed' }); break; }
+                  sendResponse(result);
                 } catch (e) { sendResponse({ error: (e as Error).message }); }
                 break;
               }

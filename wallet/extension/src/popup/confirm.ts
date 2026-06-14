@@ -4,7 +4,7 @@ import { MSG_APPROVAL_RESPONSE, SK_APPROVAL_PREFIX } from '../lib/constants';
 
 interface PendingApproval {
   id: string;
-  type: 'connect' | 'sign_message' | 'send_transaction' | 'call_contract' | 'pvac_decrypt' | 'pvac_prove';
+  type: 'connect' | 'sign_message' | 'send_transaction' | 'call_contract' | 'pvac_decrypt' | 'pvac_prove' | 'zktls_prove';
   origin: string;
   data: Record<string, unknown>;
 }
@@ -92,6 +92,15 @@ async function load() {
         ${approval.data.detail ? `<div class="row"><span class="label">Details:</span> <span class="value">${escapeHtml(String(approval.data.detail))}</span></div>` : ''}
       `;
       warningEl.textContent = 'This will use your private key to generate a cryptographic proof.';
+      break;
+
+    case 'zktls_prove':
+      titleEl.textContent = 'TLS Session Proof';
+      detailsEl.innerHTML = `
+        <div class="row"><span class="label">Operation:</span> <span class="value">${escapeHtml(String(approval.data.operation ?? 'Prove TLS session'))}</span></div>
+        ${approval.data.detail ? `<div class="row"><span class="label">Details:</span> <span class="value">${escapeHtml(String(approval.data.detail))}</span></div>` : ''}
+      `;
+      warningEl.textContent = 'This will record a TLS session and generate a zero-knowledge proof of the decryption.';
       break;
   }
 
