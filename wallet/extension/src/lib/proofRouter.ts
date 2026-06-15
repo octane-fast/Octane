@@ -5,6 +5,8 @@
  *   3) WASM fallback (offscreen document or in-process)
  */
 
+import { touchJob, setJob } from './jobStore';
+
 // --- Constants ---
 export const PROVER_URL = 'http://127.0.0.1:19876';
 export const PROVER_WS_URL = 'ws://127.0.0.1:19876/prove';
@@ -89,13 +91,12 @@ async function sanitizeProverPayload(payload: Record<string, string>): Promise<R
 
 export function runNativeProver(jobId: string, payload: Record<string, string>): Promise<Record<string, string>> {
   return new Promise((resolve, reject) => {
-    const storageKey = `job_${jobId}`;
     const ws = new WebSocket(PROVER_WS_URL);
     let settled = false;
 
     // Keep service worker alive during long proving operations (Chrome MV3 kills after ~30s idle)
     const keepAlive = setInterval(() => {
-      chrome.storage.local.get(storageKey);
+      touchJob(jobId).catch(() => {});
     }, 5000);
 
     const cleanup = () => { clearInterval(keepAlive); };
@@ -111,7 +112,7 @@ export function runNativeProver(jobId: string, payload: Record<string, string>):
       try {
         const msg = JSON.parse(ev.data as string);
         if (msg.type === 'status') {
-          chrome.storage.local.set({ [storageKey]: { status: 'running', step: msg.step } });
+          setJob(jobId, { status: 'running', step: msg.step });
         } else if (msg.type === 'result' && msg.data) {
           settled = true;
           cleanup();
@@ -164,7 +165,6 @@ export function runNativeProver(jobId: string, payload: Record<string, string>):
 
 export function runRemoteProver(jobId: string, payload: Record<string, string>, config: PairingConfig): Promise<Record<string, string>> {
   return new Promise((resolve, reject) => {
-    const storageKey = `job_${jobId}`;
     const wsUrl = `${config.relay}/room/${config.room}?role=client`;
     const ws = new WebSocket(wsUrl);
     let settled = false;
@@ -196,7 +196,7 @@ export function runRemoteProver(jobId: string, payload: Record<string, string>, 
 
         // Prover messages (forwarded from accelerator)
         if (msg.type === 'status') {
-          chrome.storage.local.set({ [storageKey]: { status: 'running', step: msg.step } });
+          setJob(jobId, { status: 'running', step: msg.step });
         } else if (msg.type === 'result' && msg.data) {
           settled = true;
           ws.close();

@@ -20,6 +20,8 @@ inline std::vector<Fp> layer_R_cached(
 ) {
     if ((size_t)lid >= C.L.size())
         throw std::runtime_error("pvac: layer_R_cached: layer id out of range");
+    if (st.size() != C.L.size() || cache.size() != C.L.size())
+        throw std::runtime_error("pvac: layer_R_cached: work buffer shape rejected");
 
     if (st[lid] == 2) return cache[lid];
 

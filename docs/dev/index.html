@@ -183,6 +183,13 @@
       <input type="text" id="zktls-url" placeholder="https://api.github.com/zen" value="https://api.github.com/zen">
       <label>Custom Headers (JSON, optional)</label>
       <input type="text" id="zktls-headers" placeholder='{"Accept": "application/json"}'>
+      <label>Claim ID (unique, cached by extension)</label>
+      <input type="text" id="zktls-id" placeholder="github-zen-proof" value="">
+      <label>Record Indices (comma-separated, blank = all)</label>
+      <input type="text" id="zktls-records" placeholder="0,1">
+      <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+        <input type="checkbox" id="zktls-regenerate"> Force regenerate (skip cache)
+      </label>
       <div class="actions">
         <button id="btn-zktls">Prove TLS Session</button>
       </div>
@@ -326,6 +333,10 @@
       if (hStr) {
         try { headers = JSON.parse(hStr); } catch { showResult('zktls-result', 'Headers must be valid JSON', true); return; }
       }
+      const id = document.getElementById('zktls-id').value.trim() || undefined;
+      const regenerate = document.getElementById('zktls-regenerate').checked || undefined;
+      const recordsStr = document.getElementById('zktls-records').value.trim();
+      const records = recordsStr ? recordsStr.split(',').map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n)) : undefined;
       const btn = document.getElementById('btn-zktls');
       const status = document.getElementById('zktls-status');
       btn.disabled = true;
@@ -335,10 +346,16 @@
       showResult('zktls-result', 'Recording TLS session, then proving with Jolt zkVM…\nThis takes ~90 seconds for 3 handshake records.\n', false);
       try {
         const start = Date.now();
-        const res = await call('octra_requestZktlsProofJolt', [{ url, headers }]);
+        const params = { url, headers, id, regenerate, records };
+        const res = await call('octra_requestZktlsProofJolt', [params]);
         const elapsed = ((Date.now() - start) / 1000).toFixed(1);
-        status.textContent = `✅ Proof generated in ${elapsed}s`;
-        status.style.color = '#4ade80';
+        if (res._cached) {
+          status.textContent = `✅ Cached proof (age: ${res._cacheAge}s, <1s)`;
+          status.style.color = '#60a5fa';
+        } else {
+          status.textContent = `✅ Proof generated in ${elapsed}s`;
+          status.style.color = '#4ade80';
+        }
         showResult('zktls-result', res);
       } catch (e) {
         status.textContent = '❌ Failed';

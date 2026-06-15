@@ -150,7 +150,7 @@
         <button class="tab active" data-tab="send">Send</button>
         <button class="tab" data-tab="shield">Shield</button>
         <button class="tab" data-tab="activity">Activity</button>
-        <button class="tab" data-tab="content">Content</button>
+        <button class="tab" data-tab="claims">Claims</button>
       </div>
       <div id="tab-send" class="tab-content">
         <div class="send-to-wrap">
@@ -189,25 +189,8 @@
         <div id="activity-list" class="activity-list"><p class="muted">No activity yet</p></div>
         <a id="explorer-link" href="https://octrascan.io/" target="_blank" rel="noopener" class="explorer-link">View all on OctraScan ↗</a>
       </div>
-      <div id="tab-content" class="tab-content hidden">
-        <div class="content-input-row">
-          <input type="text" id="nft-contract-input" placeholder="NFT contract address (oct...)" autocomplete="off" spellcheck="false">
-          <button id="btn-load-nft" class="primary content-load-btn">Load</button>
-        </div>
-        <div id="nft-collection-header" class="nft-collection-header hidden">
-          <div class="nft-col-info">
-            <span id="nft-col-name" class="nft-col-name"></span>
-            <span id="nft-col-stats" class="nft-col-stats"></span>
-          </div>
-        </div>
-        <div id="nft-grid" class="nft-grid"></div>
-        <div id="nft-empty" class="nft-empty hidden">
-          <p>No NFTs found for this address</p>
-        </div>
-        <div id="nft-loading" class="nft-loading hidden">
-          <div class="shimmer nft-loading-spinner"></div>
-          <p>Loading NFTs…</p>
-        </div>
+      <div id="tab-claims" class="tab-content hidden">
+        <div id="claims-list" class="claims-list"><p class="muted">No zkTLS claims yet</p></div>
       </div>
     </div>
 

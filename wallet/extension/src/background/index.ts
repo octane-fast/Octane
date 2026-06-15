@@ -38,6 +38,8 @@ import {
   MSG_STEALTH_CLAIM, MSG_IMPORT_PAIRING, MSG_REMOVE_PAIRING,
   MSG_GET_PROVER_STATUS, MSG_SET_PROVER_MODE,
   MSG_FETCH_CIRCLE_ASSET, MSG_GET_NFT_CONTENT,
+  MSG_GET_ZKTLS_CLAIMS,
+  SK_ZKTLS_PROOF_PREFIX, SK_ACTIVE_ZKTLS_JOB, SK_ACTIVE_ZKTLS_START,
   ACTION_INIT, ACTION_DECRYPT,
   ERR_LOCKED,
   SIG_ENCRYPTED_BALANCE,
@@ -60,11 +62,12 @@ import {
 import { type ApprovalType } from '../lib/types';
 import { enableTorProxy, disableTorProxy, isTorReachable } from '../lib/tor';
 import { runJobCleanup, cleanupOrphanedApprovals } from '../lib/cleanup';
-import { completeJob, resumePendingUnlockJobs } from '../lib/jobStore';
+import { completeJob, resumePendingUnlockJobs, setJob, getJob, removeJob } from '../lib/jobStore';
 import {
   PROVER_URL, isProverAvailable, isRemoteProverConfigured,
   invalidateProverCache, setKeyProvider, route as routeProof,
 } from '../lib/proofRouter';
+import { getCachedProof, setCachedProof, getAllCachedProofs } from '../lib/zktlsCache';
 import { parseAmountRaw, formatAmountHuman } from '../lib/units';
 import { buildSignedTx, buildCanonical } from '../lib/txBuilder';
 import { getDefaultFee, getOperationFee } from '../lib/fees';
@@ -518,15 +521,14 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
 
             // Create job and respond immediately
             const jobId = crypto.randomUUID();
-            const storageKey = `job_${jobId}`;
-            await chrome.storage.local.set({ [storageKey]: { status: 'running', step: 'Ensuring PVAC key registered...' } });
+            await setJob(jobId, { status: 'running', step: 'Ensuring PVAC key registered...' });
             sendResponse({ jobId });
 
             // Ensure PVAC pubkey is registered on-chain
             try {
               await ensurePvacRegistered();
             } catch (regErr) {
-              await chrome.storage.local.set({ [storageKey]: { status: 'error', error: (regErr as Error).message } });
+              await setJob(jobId, { status: 'error', error: (regErr as Error).message });
               break;
             }
 
@@ -549,14 +551,14 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
 
           // Generate job ID and respond immediately so popup can close
           const jobId = crypto.randomUUID();
-          await chrome.storage.local.set({ [`job_${jobId}`]: { status: 'running', step: 'Ensuring PVAC key registered...', startedAt: Date.now() } });
+          await setJob(jobId, { status: 'running', step: 'Ensuring PVAC key registered...', startedAt: Date.now() });
           sendResponse({ jobId });
 
           // Ensure PVAC pubkey is registered on-chain
           try {
             await ensurePvacRegistered();
           } catch (err) {
-            await chrome.storage.local.set({ [`job_${jobId}`]: { status: 'error', error: (err as Error).message } });
+            await setJob(jobId, { status: 'error', error: (err as Error).message });
             break;
           }
 
@@ -566,16 +568,16 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
         }
         case MSG_GET_JOB_STATUS: {
           const { jobId } = payload as { jobId: string };
-          const data = await chrome.storage.local.get(`job_${jobId}`);
-          sendResponse(data[`job_${jobId}`] ?? { status: 'unknown' });
+          const data = await getJob(jobId);
+          sendResponse(data ?? { status: 'unknown' });
           break;
         }
         case MSG_CANCEL_UNSHIELD:
         case MSG_CANCEL_JOB: {
           const { jobId } = payload as { jobId: string };
-          const storageKey = `job_${jobId}`;
-          await chrome.storage.local.set({ [storageKey]: { status: 'cancelled' } });
-          await chrome.storage.local.remove([`${storageKey}_crypto`, `${storageKey}_params`, `job_${jobId}_stealth`, `job_${jobId}_stealth_params`, 'activeUnshieldJob', 'activeUnshieldStart', 'activeShieldJob', 'activeShieldStart', 'activeStealthJob', 'activeStealthStart']);
+          await setJob(jobId, { status: 'cancelled' });
+          await removeJob(jobId);
+          await chrome.storage.local.remove(['activeUnshieldJob', 'activeUnshieldStart', 'activeShieldJob', 'activeShieldStart', 'activeStealthJob', 'activeStealthStart', 'activeClaimJob', 'activeClaimStart']);
           currentJobStorageKey = null;
           sendResponse({ success: true });
           break;
@@ -1184,6 +1186,15 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
                 break;
               }
 
+              // Filter proof records to only the requested indices
+              function filterProofRecords(result: Record<string, unknown>, indices?: number[]): Record<string, unknown> {
+                if (!indices || indices.length === 0) return result;
+                const records = result.records as Array<Record<string, unknown>> | undefined;
+                if (!records) return result;
+                const indexSet = new Set(indices);
+                return { ...result, records: records.filter((_, i) => indexSet.has(i)) };
+              }
+
               // ── zkTLS Proof (Jolt) ──────────────────────────────────
               // Records a TLS session with the given URL, proves the decryption
               // using the Jolt zkVM (via Octane Accelerator), and returns the
@@ -1193,8 +1204,31 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
                   const unlocked = await ensureUnlocked();
                   if (!unlocked) { sendResponse({ error: ERR_WALLET_LOCKED }); break; }
                 }
-                const [zktlsParams] = dappParams as [{ url: string; headers?: Record<string, string> }];
+                const [zktlsParams] = dappParams as [{ url: string; headers?: Record<string, string>; id?: string; regenerate?: boolean; records?: number[] }];
                 if (!zktlsParams?.url) { sendResponse({ error: 'Missing url parameter' }); break; }
+
+                // Check cache if an ID was provided and regenerate is not set
+                const proofId = zktlsParams.id;
+                if (proofId && !zktlsParams.regenerate) {
+                  try {
+                    const entry = await getCachedProof(proofId);
+                    if (entry) {
+                      const ageSec = Math.floor((Date.now() - entry.timestamp) / 1000);
+                      console.log('[zktls] returning cached proof for id=%s (age=%ds)', proofId, ageSec);
+                      const cachedResult = { ...(entry.result as Record<string, unknown>), _cached: true, _cacheAge: ageSec };
+                      sendResponse(filterProofRecords(cachedResult, zktlsParams.records));
+                      break;
+                    }
+                  } catch (e) { console.warn('[zktls] IDB read error:', (e as Error).message); }
+                }
+
+                // Fail-fast: check prover availability before showing approval dialog
+                const nativeReady = await isProverAvailable();
+                const remoteReady = await isRemoteProverConfigured();
+                if (!nativeReady && !remoteReady) {
+                  sendResponse({ error: 'No prover available. Start the Octane Accelerator or configure a remote prover.' });
+                  break;
+                }
 
                 const zktlsApproved = await requestUserApproval(
                   APPROVAL_ZKTLS_PROVE,
@@ -1202,9 +1236,14 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
                   {
                     operation: 'Prove TLS session (Jolt zkVM)',
                     detail: `URL: ${zktlsParams.url}`,
+                    proofId: proofId ?? null,
                   }
                 );
                 if (!zktlsApproved) { sendResponse({ error: ERR_USER_REJECTED_REQUEST }); break; }
+
+                // Track as in-progress in activity tab
+                const zktlsJobId = `zktls_${Date.now()}`;
+                await chrome.storage.local.set({ [SK_ACTIVE_ZKTLS_JOB]: zktlsJobId, [SK_ACTIVE_ZKTLS_START]: Date.now() });
 
                 try {
                   const result = await routeProof({
@@ -1214,11 +1253,36 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
                       url: zktlsParams.url,
                       headers: JSON.stringify(zktlsParams.headers ?? {}),
                     },
-                    onStatus: (step) => console.log('[zktls] %s', step),
+                    onStatus: (step) => {
+                      console.log('[zktls] %s', step);
+                      // Update job status so activity tab shows current step
+                      setJob(zktlsJobId, { status: 'running', step });
+                    },
                   });
-                  if (!result) { sendResponse({ error: 'All provers failed' }); break; }
-                  sendResponse(result);
+                  if (!result) {
+                    sendResponse({ error: 'No prover available. Start the Octane Accelerator or configure a remote prover.' });
+                  } else {
+                    // Cache the result in IndexedDB if an ID was provided
+                    if (proofId) {
+                      try {
+                        await setCachedProof({
+                          id: proofId,
+                          result,
+                          timestamp: Date.now(),
+                          url: zktlsParams.url,
+                          headers: zktlsParams.headers ?? {},
+                          origin: dappOrigin,
+                        });
+                        console.log('[zktls] cached proof in IDB for id=%s', proofId);
+                      } catch (e) { console.warn('[zktls] IDB write error:', (e as Error).message); }
+                    }
+                    sendResponse(filterProofRecords(result, zktlsParams.records));
+                  }
                 } catch (e) { sendResponse({ error: (e as Error).message }); }
+                finally {
+                  await removeJob(zktlsJobId);
+                  await chrome.storage.local.remove([SK_ACTIVE_ZKTLS_JOB, SK_ACTIVE_ZKTLS_START]);
+                }
                 break;
               }
 
@@ -1301,15 +1365,14 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
 
             // Create job and respond immediately
             const jobId = crypto.randomUUID();
-            const storageKey = `job_${jobId}`;
-            await chrome.storage.local.set({ [storageKey]: { status: 'running', step: 'Ensuring PVAC key registered...' } });
+            await setJob(jobId, { status: 'running', step: 'Ensuring PVAC key registered...' });
             sendResponse({ jobId });
 
             // Ensure PVAC pubkey is registered on-chain
             try {
               await ensurePvacRegistered();
             } catch (regErr) {
-              await chrome.storage.local.set({ [storageKey]: { status: 'error', error: (regErr as Error).message } });
+              await setJob(jobId, { status: 'error', error: (regErr as Error).message });
               break;
             }
 
@@ -1419,8 +1482,7 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
 
             // Create job and respond immediately
             const jobId = crypto.randomUUID();
-            const storageKey = `job_${jobId}`;
-            await chrome.storage.local.set({ [storageKey]: { status: 'running', step: 'Ensuring PVAC key registered...' } });
+            await setJob(jobId, { status: 'running', step: 'Ensuring PVAC key registered...' });
             sendResponse({ jobId, amount: String(decResult.amount) });
 
             // Remove claimed output from pending list (serialized to avoid races)
@@ -1438,7 +1500,7 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
             try {
               await ensurePvacRegistered();
             } catch (regErr) {
-              await chrome.storage.local.set({ [storageKey]: { status: 'error', error: (regErr as Error).message } });
+              await setJob(jobId, { status: 'error', error: (regErr as Error).message });
               break;
             }
 
@@ -1560,6 +1622,16 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
           }
           break;
         }
+        case MSG_GET_ZKTLS_CLAIMS: {
+          try {
+            const claims = await getAllCachedProofs();
+            claims.sort((a, b) => b.timestamp - a.timestamp);
+            sendResponse({ claims });
+          } catch (e) {
+            sendResponse({ claims: [], error: (e as Error).message });
+          }
+          break;
+        }
         default:
           sendResponse({ error: `unknown message type: ${type}` });
       }
@@ -1615,9 +1687,9 @@ chrome.runtime.onConnect.addListener((port) => {
     offscreenPort = port;
     port.onMessage.addListener(async (msg) => {
       if (msg.type === 'jobStatus' && msg.jobId) {
-        await chrome.storage.local.set({ [`job_${msg.jobId}`]: { status: 'running', step: msg.step } });
+        await setJob(msg.jobId, { status: 'running', step: msg.step });
       } else if (msg.type === 'jobError' && msg.jobId) {
-        await chrome.storage.local.set({ [`job_${msg.jobId}`]: { status: 'error', error: msg.error } });
+        await setJob(msg.jobId, { status: 'error', error: msg.error });
       }
     });
     port.onDisconnect.addListener(() => { offscreenPort = null; });

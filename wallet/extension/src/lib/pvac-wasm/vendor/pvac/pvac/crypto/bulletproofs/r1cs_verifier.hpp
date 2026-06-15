@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <vector>
 #include <cassert>
+#include <limits>
 #include "transcript.hpp"
 #include "generators.hpp"
 #include "inner_product.hpp"
@@ -12,6 +13,11 @@
 namespace pvac {
 namespace bp {
 
+inline constexpr size_t R1CS_MAX_GATES = BP_MAX_VECTOR_SIZE;
+inline constexpr size_t R1CS_MAX_COMMITTED = static_cast<size_t>(1) << 16;
+inline constexpr size_t R1CS_MAX_CONSTRAINTS = static_cast<size_t>(1) << 20;
+inline constexpr size_t R1CS_MAX_TERMS = static_cast<size_t>(1) << 22;
+
 struct ConstraintSystem {
     size_t num_gates;
     size_t num_committed;
@@ -20,7 +26,85 @@ struct ConstraintSystem {
     size_t padded_gates() const {
         return next_power_of_2(num_gates > 0 ? num_gates : 1);
     }
+
+    bool padded_gates_checked(size_t& out) const {
+        if (num_gates > R1CS_MAX_GATES)
+            return false;
+        try {
+            out = padded_gates();
+        } catch (...) {
+            return false;
+        }
+        return out != 0 && out <= R1CS_MAX_GATES;
+    }
 };
+
+inline bool r1cs_var_ok(const Variable& var, size_t gates, size_t committed) {
+    switch (var.type) {
+        case VarType::ONE:
+            return var.index == 0;
+        case VarType::COMMITTED:
+            return var.index < committed;
+        case VarType::MULT_LEFT:
+        case VarType::MULT_RIGHT:
+        case VarType::MULT_OUT:
+            return var.index < gates;
+    }
+    return false;
+}
+
+inline bool r1cs_system_ok(const ConstraintSystem& cs, size_t N) {
+    if (N == 0 || N > R1CS_MAX_GATES)
+        return false;
+    if (cs.num_gates > R1CS_MAX_GATES)
+        return false;
+    if (cs.num_committed > R1CS_MAX_COMMITTED)
+        return false;
+    if (cs.constraints.size() > R1CS_MAX_CONSTRAINTS)
+        return false;
+    size_t terms = 0;
+    for (const auto& constraint : cs.constraints) {
+        if (constraint.lc.terms.size() > R1CS_MAX_TERMS - terms)
+            return false;
+        terms += constraint.lc.terms.size();
+        for (const auto& term : constraint.lc.terms) {
+            if (!r1cs_var_ok(term.first, cs.num_gates, cs.num_committed))
+                return false;
+        }
+    }
+    return true;
+}
+
+inline bool rist_valid(const RistrettoPoint& point) {
+    ExtPoint decoded;
+    return rist_decode(decoded, point);
+}
+
+inline bool ipp_points_valid(const InnerProductProof& proof) {
+    if (proof.L.size() != proof.R.size()) return false;
+    for (const auto& point : proof.L)
+        if (!rist_valid(point))
+            return false;
+    for (const auto& point : proof.R)
+        if (!rist_valid(point))
+            return false;
+    return true;
+}
+
+inline bool r1cs_points_valid(const R1CSProof& proof) {
+    if (!rist_valid(proof.A_I1)) return false;
+    if (!rist_valid(proof.A_O1)) return false;
+    if (!rist_valid(proof.S1)) return false;
+    if (!rist_valid(proof.T_1)) return false;
+    if (!rist_valid(proof.T_3)) return false;
+    if (!rist_valid(proof.T_4)) return false;
+    if (!rist_valid(proof.T_5)) return false;
+    if (!rist_valid(proof.T_6)) return false;
+    for (const auto& point : proof.V)
+        if (!rist_valid(point))
+            return false;
+    return ipp_points_valid(proof.ipp);
+}
 
 inline bool ipp_verify_with_y(
     Transcript& transcript,
@@ -30,8 +114,14 @@ inline bool ipp_verify_with_y(
     size_t n,
     const std::vector<Scalar>& y_inv_n
 ) {
+    if (!rist_valid(P)) return false;
+    if (!rist_valid(Q)) return false;
+    if (!ipp_points_valid(proof)) return false;
+    if (n == 0 || n > BP_MAX_VECTOR_SIZE || y_inv_n.size() != n) return false;
+
     size_t lg = proof.L.size();
     if (proof.R.size() != lg) return false;
+    if (lg >= std::numeric_limits<size_t>::digits) return false;
     if ((1ULL << lg) != n) return false;
 
     std::vector<Scalar> challenges(lg);
@@ -90,9 +180,12 @@ inline bool r1cs_verify(
 ) {
     const size_t m = cs.num_committed;
     const size_t q = cs.constraints.size();
-    const size_t N = cs.padded_gates();
+    size_t N = 0;
+    if (!cs.padded_gates_checked(N)) return false;
+    if (!r1cs_system_ok(cs, N)) return false;
 
     if (proof.V.size() != m) return false;
+    if (!r1cs_points_valid(proof)) return false;
 
     transcript.append_u64("n", N);
     transcript.append_u64("m", m);

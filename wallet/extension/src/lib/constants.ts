@@ -114,6 +114,7 @@ export const MSG_SET_PROVER_MODE = 'SET_PROVER_MODE' as const;
 export const MSG_FETCH_CIRCLE_ASSET = 'FETCH_CIRCLE_ASSET' as const;
 export const MSG_GET_NFT_CONTENT = 'GET_NFT_CONTENT' as const;
 export const MSG_ZKTLS_PROVE = 'ZKTLS_PROVE' as const;
+export const MSG_GET_ZKTLS_CLAIMS = 'GET_ZKTLS_CLAIMS' as const;
 
 // ─── Offscreen Actions ──────────────────────────────────────────────────────
 
@@ -146,6 +147,8 @@ export const SK_ACTIVE_STEALTH_START = 'activeStealthStart';
 export const SK_ACTIVE_CLAIM_JOB = 'activeClaimJob';
 export const SK_ACTIVE_CLAIM_START = 'activeClaimStart';
 export const SK_ACTIVE_CLAIM_AMOUNT = 'activeClaimAmount';
+export const SK_ACTIVE_ZKTLS_JOB = 'activeZktlsJob';
+export const SK_ACTIVE_ZKTLS_START = 'activeZktlsStart';
 export const SK_STEALTH_LAST_EPOCH = 'stealthLastEpoch_';  // + address
 export const SK_STEALTH_PENDING = 'stealthPending_';        // + address
 export const SK_STEALTH_CLAIMED = 'stealthClaimed_';        // + address (ids of claimed outputs)
@@ -156,6 +159,9 @@ export const SK_FEE_ENCRYPT = 'feeOverride_encrypt';
 export const SK_FEE_DECRYPT = 'feeOverride_decrypt';
 export const SK_FEE_STEALTH = 'feeOverride_stealth';
 export const SK_FEE_CLAIM = 'feeOverride_claim';
+
+// zkTLS proof cache (stored in IndexedDB, key prefix kept for migration)
+export const SK_ZKTLS_PROOF_PREFIX = 'zktls_proof_';
 
 // ─── Error Strings ──────────────────────────────────────────────────────────
 

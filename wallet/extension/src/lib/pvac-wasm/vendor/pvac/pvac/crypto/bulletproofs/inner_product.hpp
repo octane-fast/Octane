@@ -27,7 +27,7 @@ inline RistrettoPoint multi_scalar_mul(
 
     std::vector<ExtPoint> pts(n);
     for (size_t i = 0; i < n; i++)
-        rist_decode(pts[i], points[i]);
+        pts[i] = rist_decode_or_throw(points[i]);
 
     std::vector<std::array<uint8_t, 32>> sbytes(n);
     for (size_t i = 0; i < n; i++)

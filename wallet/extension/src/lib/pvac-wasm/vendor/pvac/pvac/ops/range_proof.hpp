@@ -5,6 +5,7 @@
 #include <array>
 #include <thread>
 #include <algorithm>
+#include <stdexcept>
 
 #include "../core/types.hpp"
 #include "verify_zero.hpp"
@@ -16,6 +17,11 @@
 namespace pvac {
 
 static constexpr size_t RANGE_BITS = 64;
+static constexpr size_t RANGE_MAX_VALUE_LAYERS = 512;
+static constexpr size_t RANGE_MAX_VALUE_EDGES = 65536;
+static constexpr size_t RANGE_MAX_BIT_LAYERS = 4;
+static constexpr size_t RANGE_MAX_BIT_EDGES = 8192;
+static constexpr size_t RANGE_MAX_SLOTS = 1;
 
 struct RangeProof {
 
@@ -26,12 +32,31 @@ struct RangeProof {
     ZeroProof lc_proof;
 };
 
+inline bool range_value_cipher_ok(const PubKey& pk, const Cipher& ct) {
+    return
+        is_cipher_compatible_with_pubkey(pk, ct) &&
+        ct.slots > 0 &&
+        ct.slots <= RANGE_MAX_SLOTS &&
+        ct.L.size() <= RANGE_MAX_VALUE_LAYERS &&
+        ct.E.size() <= RANGE_MAX_VALUE_EDGES;
+}
+
+inline bool range_bit_cipher_ok(const PubKey& pk, const Cipher& ct, size_t slots) {
+    return
+        is_cipher_compatible_with_pubkey(pk, ct) &&
+        ct.slots == slots &&
+        ct.L.size() <= RANGE_MAX_BIT_LAYERS &&
+        ct.E.size() <= RANGE_MAX_BIT_EDGES;
+}
+
 inline RangeProof make_range_proof(
     const PubKey& pk,
     const SecKey& sk,
     const Cipher& ct_value,
     uint64_t value
 ) {
+    if (!range_value_cipher_ok(pk, ct_value))
+        throw std::runtime_error("pvac: range proof value rejected");
     RangeProof rp;
     rp.ct_bit.resize(RANGE_BITS);
     rp.bit_proofs.resize(RANGE_BITS);
@@ -104,12 +129,12 @@ inline bool verify_range(
     const Cipher& ct_value,
     const RangeProof& rp
 ) {
-    if (!is_cipher_compatible_with_pubkey(pk, ct_value)) return false;
+    if (!range_value_cipher_ok(pk, ct_value)) return false;
 
     if (rp.ct_bit.size() != RANGE_BITS) return false;
     if (rp.bit_proofs.size() != RANGE_BITS) return false;
     for (const auto& ct_bit : rp.ct_bit)
-        if (!is_cipher_compatible_with_pubkey(pk, ct_bit))
+        if (!range_bit_cipher_ok(pk, ct_bit, ct_value.slots))
             return false;
 
     unsigned hw = std::thread::hardware_concurrency();
@@ -226,7 +251,7 @@ inline void prepare_lc(
     const Cipher& ct_lc_diff,
     BitPrepData& out
 ) {
-    out.ct_check = ct_lc_diff;  // reuse field for the LC cipher
+    out.ct_check = ct_lc_diff;
 
     size_t nL = ct_lc_diff.L.size();
     size_t S  = ct_lc_diff.slots;
@@ -285,12 +310,13 @@ inline AggregatedRangeProof make_aggregated_range_proof(
     const Cipher& ct_value,
     uint64_t value
 ) {
+    if (!range_value_cipher_ok(pk, ct_value))
+        throw std::runtime_error("pvac: aggregated range value rejected");
     AggregatedRangeProof arp;
     arp.ct_bit.resize(RANGE_BITS);
 
     std::vector<detail::BitPrepData> bit_data(RANGE_BITS);
 
-    // Phase 1: parallel — encrypt bits + compute ct_check + decrypt layers
     unsigned hw = std::thread::hardware_concurrency();
     unsigned n_threads = (hw > 1) ? std::min(hw, (unsigned)RANGE_BITS) : 1;
 
@@ -331,7 +357,6 @@ inline AggregatedRangeProof make_aggregated_range_proof(
                           lc_data.A, lc_data.bases,
                           &lc_data.rinv, &sk);
 
-    // Phase 4: prove
     bp::Transcript transcript("pvac.range_proof.aggregated");
     detail::append_transcript_params(transcript, bit_data, lc_data);
 
@@ -344,10 +369,10 @@ inline bool verify_aggregated_range(
     const Cipher& ct_value,
     const AggregatedRangeProof& arp
 ) {
-    if (!is_cipher_compatible_with_pubkey(pk, ct_value)) return false;
+    if (!range_value_cipher_ok(pk, ct_value)) return false;
     if (arp.ct_bit.size() != RANGE_BITS) return false;
     for (const auto& ct_bit : arp.ct_bit)
-        if (!is_cipher_compatible_with_pubkey(pk, ct_bit))
+        if (!range_bit_cipher_ok(pk, ct_bit, ct_value.slots))
             return false;
 
     std::vector<detail::BitPrepData> vdata(RANGE_BITS);
@@ -378,6 +403,7 @@ inline bool verify_aggregated_range(
                           nullptr, nullptr);
 
     size_t expected_v = dummy.num_committed();
+    if (expected_v > bp::R1CS_MAX_COMMITTED) return false;
     if (arp.proof.V.size() != expected_v) return false;
 
     size_t v_offset = 0;

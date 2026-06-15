@@ -14,7 +14,9 @@ import {
   MSG_STEALTH_CLAIM, MSG_IMPORT_PAIRING, MSG_REMOVE_PAIRING,
   MSG_GET_PROVER_STATUS, MSG_SET_PROVER_MODE,
   MSG_GET_NFT_CONTENT, MSG_FETCH_CIRCLE_ASSET,
+  MSG_GET_ZKTLS_CLAIMS,
   SK_FEE_DEFAULT, SK_FEE_ENCRYPT, SK_FEE_DECRYPT, SK_FEE_STEALTH, SK_FEE_CLAIM,
+  SK_ACTIVE_ZKTLS_JOB, SK_ACTIVE_ZKTLS_START,
 } from '../lib/constants';
 
 // Feature flags (must match background)
@@ -382,7 +384,7 @@ document.querySelectorAll('.tab').forEach(tab => {
     const target = (tab as HTMLElement).dataset.tab!;
     document.querySelectorAll('.tab-content').forEach(c => c.classList.add('hidden'));
     document.getElementById(`tab-${target}`)!.classList.remove('hidden');
-
+    if (target === 'claims') loadClaims();
   });
 });
 
@@ -578,13 +580,13 @@ async function loadActivity() {
     const pendingEl = document.getElementById('activity-pending')!;
 
     // Show running jobs at top (separate element, no flicker on main list)
-    const { activeUnshieldJob, activeUnshieldStart, activeShieldJob, activeShieldStart, activeStealthJob, activeStealthStart, activeClaimJob, activeClaimStart } =
-      await chrome.storage.local.get(['activeUnshieldJob', 'activeUnshieldStart', 'activeShieldJob', 'activeShieldStart', 'activeStealthJob', 'activeStealthStart', 'activeClaimJob', 'activeClaimStart']);
+    const { activeUnshieldJob, activeUnshieldStart, activeShieldJob, activeShieldStart, activeStealthJob, activeStealthStart, activeClaimJob, activeClaimStart, activeZktlsJob, activeZktlsStart } =
+      await chrome.storage.local.get(['activeUnshieldJob', 'activeUnshieldStart', 'activeShieldJob', 'activeShieldStart', 'activeStealthJob', 'activeStealthStart', 'activeClaimJob', 'activeClaimStart', 'activeZktlsJob', 'activeZktlsStart']);
 
-    const activeJobId = activeUnshieldJob || activeShieldJob || activeStealthJob || activeClaimJob;
-    const activeStart = activeUnshieldJob ? activeUnshieldStart : activeShieldJob ? activeShieldStart : activeClaimJob ? activeClaimStart : activeStealthStart;
-    const activeLabel = activeUnshieldJob ? 'Unshielding' : activeShieldJob ? 'Shielding' : activeStealthJob ? 'Stealth Send' : activeClaimJob ? 'Claiming' : '';
-    const activeTypeClass = activeUnshieldJob ? 'unshield' : activeShieldJob ? 'shield' : activeStealthJob ? 'stealth' : activeClaimJob ? 'claim' : '';
+    const activeJobId = activeUnshieldJob || activeShieldJob || activeStealthJob || activeClaimJob || activeZktlsJob;
+    const activeStart = activeUnshieldJob ? activeUnshieldStart : activeShieldJob ? activeShieldStart : activeClaimJob ? activeClaimStart : activeZktlsJob ? activeZktlsStart : activeStealthStart;
+    const activeLabel = activeUnshieldJob ? 'Unshielding' : activeShieldJob ? 'Shielding' : activeStealthJob ? 'Stealth Send' : activeClaimJob ? 'Claiming' : activeZktlsJob ? 'zkTLS Proof' : '';
+    const activeTypeClass = activeUnshieldJob ? 'unshield' : activeShieldJob ? 'shield' : activeStealthJob ? 'stealth' : activeClaimJob ? 'claim' : activeZktlsJob ? 'zktls' : '';
 
     if (activeJobId) {
       const isPlaceholder = activeJobId.startsWith('claim_pending_');
@@ -603,7 +605,7 @@ async function loadActivity() {
           e.stopPropagation();
           const jobId = (e.target as HTMLElement).dataset.job!;
           await sendMsg(MSG_CANCEL_JOB, { jobId });
-          await chrome.storage.local.remove(['activeUnshieldJob', 'activeUnshieldStart', 'activeShieldJob', 'activeShieldStart', 'activeStealthJob', 'activeStealthStart', 'activeClaimJob', 'activeClaimStart']);
+          await chrome.storage.local.remove(['activeUnshieldJob', 'activeUnshieldStart', 'activeShieldJob', 'activeShieldStart', 'activeStealthJob', 'activeStealthStart', 'activeClaimJob', 'activeClaimStart', 'activeClaimAmount', 'activeZktlsJob', 'activeZktlsStart']);
           pendingEl.innerHTML = '';
           if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
           showActionToast(`${activeLabel} cancelled`, { duration: 3000 });
@@ -1435,21 +1437,135 @@ function openNftViewer(collection: NftCollection, token: NftToken) {
   });
 }
 
-// Load button handler
-const nftContractInput = document.getElementById('nft-contract-input') as HTMLInputElement;
-const btnLoadNft = document.getElementById('btn-load-nft') as HTMLButtonElement;
+// ─── zkTLS Claims Tab ──────────────────────────────────────────────────────
 
-btnLoadNft.addEventListener('click', () => {
-  const addr = nftContractInput.value.trim();
-  if (!addr || !addr.startsWith('oct')) {
-    showToast('Enter a valid contract address');
-    return;
+interface ZktlsClaim {
+  id: string;
+  result: Record<string, unknown>;
+  timestamp: number;
+  url: string;
+  headers: Record<string, string>;
+  origin: string;
+}
+
+function getOgImageForUrl(url: string): string {
+  try {
+    const hostname = new URL(url).hostname;
+    return `https://www.google.com/s2/favicons?domain=${encodeURIComponent(hostname)}&sz=64`;
+  } catch {
+    return '';
   }
-  loadNftContent(addr);
-});
+}
 
-nftContractInput.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') btnLoadNft.click();
-});
+function getDomainFromUrl(url: string): string {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return url;
+  }
+}
+
+function formatClaimAge(timestamp: number): string {
+  const sec = Math.floor((Date.now() - timestamp) / 1000);
+  if (sec < 60) return `${sec}s ago`;
+  if (sec < 3600) return `${Math.floor(sec / 60)}m ago`;
+  if (sec < 86400) return `${Math.floor(sec / 3600)}h ago`;
+  return `${Math.floor(sec / 86400)}d ago`;
+}
+
+function extractProofSummary(result: Record<string, unknown>): string {
+  const records = result.records as Array<Record<string, unknown>> | undefined;
+  if (!records || records.length === 0) return 'No records';
+  const validCount = records.filter(r => r.proof_valid === true).length;
+  const cipher = String(result.cipherSuite ?? result.cipher ?? 'unknown');
+  const cipherShort = cipher.replace('TLS_', '').replace('_SHA256', '');
+  return `${records.length} record${records.length > 1 ? 's' : ''} · ${validCount}/${records.length} valid · ${cipherShort}`;
+}
+
+function extractPlaintextPreview(result: Record<string, unknown>): string {
+  const records = result.records as Array<Record<string, unknown>> | undefined;
+  if (!records) return '';
+  // Find the ServerToClient record (the HTTP response)
+  const serverRecord = records.find(r => r.direction === 'ServerToClient' || r.direction === 'server_to_client');
+  if (!serverRecord?.plaintext_hex) return '';
+  try {
+    const hex = String(serverRecord.plaintext_hex);
+    const bytes = hex.match(/.{1,2}/g)?.map(b => parseInt(b, 16)) ?? [];
+    // Try to decode as UTF-8, skip non-printable
+    const text = bytes.map(b => (b >= 32 && b < 127) ? String.fromCharCode(b) : '').join('');
+    // Find first line that looks like HTTP
+    const lines = text.split(/[\r\n]+/).filter(l => l.trim().length > 0);
+    return lines[0]?.slice(0, 100) ?? '';
+  } catch {
+    return '';
+  }
+}
+
+async function loadClaims() {
+  const listEl = document.getElementById('claims-list')!;
+  listEl.innerHTML = '<p class="muted">Loading claims…</p>';
+
+  try {
+    const res = await sendMsg(MSG_GET_ZKTLS_CLAIMS) as { claims?: ZktlsClaim[]; error?: string };
+    if (res.error) {
+      listEl.innerHTML = `<p class="muted">Error: ${escapeHtml(res.error)}</p>`;
+      return;
+    }
+    const claims = res.claims ?? [];
+    if (claims.length === 0) {
+      listEl.innerHTML = '<p class="muted">No zkTLS claims yet</p>';
+      return;
+    }
+
+    listEl.innerHTML = claims.map(claim => {
+      const domain = getDomainFromUrl(claim.url);
+      const favicon = getOgImageForUrl(claim.url);
+      const summary = extractProofSummary(claim.result);
+      const preview = extractPlaintextPreview(claim.result);
+      const age = formatClaimAge(claim.timestamp);
+      const date = new Date(claim.timestamp).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+      return `<div class="claim-card" data-claim-id="${escapeHtml(claim.id)}">
+        <div class="claim-header">
+          <div class="claim-favicon-wrap">
+            ${favicon ? `<img class="claim-favicon" src="${escapeHtml(favicon)}" alt="" onerror="this.style.display='none'">` : '<div class="claim-favicon-placeholder">🔒</div>'}
+          </div>
+          <div class="claim-meta">
+            <span class="claim-domain">${escapeHtml(domain)}</span>
+            <span class="claim-id">${escapeHtml(claim.id)}</span>
+          </div>
+          <span class="claim-age">${escapeHtml(age)}</span>
+        </div>
+        <div class="claim-body">
+          <span class="claim-url">${escapeHtml(claim.url)}</span>
+          <span class="claim-summary">${escapeHtml(summary)}</span>
+          ${preview ? `<span class="claim-preview">${escapeHtml(preview)}</span>` : ''}
+        </div>
+        <div class="claim-footer">
+          <span class="claim-date">${escapeHtml(date)}</span>
+          <span class="claim-origin">via ${escapeHtml(claim.origin)}</span>
+        </div>
+      </div>`;
+    }).join('');
+
+    // Click to expand/view raw proof
+    listEl.querySelectorAll('.claim-card').forEach(card => {
+      card.addEventListener('click', () => {
+        const claimId = (card as HTMLElement).dataset.claimId;
+        const claim = claims.find(c => c.id === claimId);
+        if (claim) {
+          const json = JSON.stringify(claim.result, null, 2);
+          const blob = new Blob([json], { type: 'application/json' });
+          const url = URL.createObjectURL(blob);
+          chrome.tabs.create({ url });
+          setTimeout(() => URL.revokeObjectURL(url), 1000);
+        }
+      });
+    });
+
+  } catch (err) {
+    listEl.innerHTML = `<p class="muted">Error: ${(err as Error).message}</p>`;
+  }
+}
 
 init();

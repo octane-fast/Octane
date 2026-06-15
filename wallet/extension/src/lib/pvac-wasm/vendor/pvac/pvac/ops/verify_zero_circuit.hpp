@@ -48,6 +48,21 @@ inline CircuitWiring build_circuit(
     size_t S = ct.slots;
     size_t nB = bases.size();
 
+    if (A.size() != nL)
+        throw std::runtime_error("pvac: coefficient/layer size mismatch");
+    for (size_t lid = 0; lid < nL; ++lid) {
+        if (A[lid].size() != S)
+            throw std::runtime_error("pvac: coefficient/slots size mismatch");
+        const auto& layer = ct.L[lid];
+        if (layer.rule == RRule::PROD &&
+            (layer.pa >= lid || layer.pb >= lid))
+            throw std::runtime_error("pvac: invalid product parent");
+        if (layer.rule == RRule::PROD && !layer.PC.empty())
+            throw std::runtime_error("pvac: product layer must not contain PC");
+        if (layer.rule != RRule::BASE && layer.rule != RRule::PROD)
+            throw std::runtime_error("pvac: invalid layer rule");
+    }
+
     CircuitWiring w;
     w.layer_vars.resize(nL);
     for (size_t lid = 0; lid < nL; lid++)

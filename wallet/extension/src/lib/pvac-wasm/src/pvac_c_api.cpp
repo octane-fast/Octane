@@ -240,6 +240,9 @@ int pvac_verify_zero_bound(pvac_pubkey pk, pvac_cipher ct, pvac_zero_proof proof
                             const uint8_t amount_commitment[32]) {
     pvac::RistrettoPoint commit;
     std::memcpy(commit.data(), amount_commitment, 32);
+    pvac::ExtPoint decoded_commit;
+    if (!pvac::rist_decode(decoded_commit, commit))
+        return 0;
     try {
         return pvac::verify_zero_bound(*PK(pk), *CT(ct), *ZP(proof), commit) ? 1 : 0;
     } catch (...) {

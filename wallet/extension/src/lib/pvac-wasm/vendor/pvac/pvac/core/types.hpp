@@ -131,7 +131,9 @@ inline bool is_valid_cipher_shape(const Cipher& cipher) {
         const auto& layer = cipher.L[layer_id];
         if (layer.rule != RRule::BASE && layer.rule != RRule::PROD)
             return false;
-        if (layer.rule == RRule::PROD && (layer.pa >= cipher.L.size() || layer.pb >= cipher.L.size()))
+        if (layer.rule == RRule::PROD && (layer.pa >= layer_id || layer.pb >= layer_id))
+            return false;
+        if (layer.rule == RRule::PROD && !layer.PC.empty())
             return false;
         if (!layer.PC.empty() && layer.PC.size() != cipher.slots)
             return false;

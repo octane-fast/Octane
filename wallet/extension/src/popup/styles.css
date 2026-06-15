@@ -293,6 +293,8 @@ label { font-size: 11px; font-weight: 500; color: var(--text-muted); margin-top:
 .activity-type.unshield { color: var(--warning); }
 .activity-type.shield { color: #9768ff; }
 .activity-type.stealth { color: #12c2e0; }
+.activity-type.claim { color: #f472b6; }
+.activity-type.zktls { color: #a78bfa; }
 .activity-item.pending { border-color: var(--warning); background: rgba(212, 160, 23, 0.04); }
 .activity-item.confirming { border-color: var(--primary); background: rgba(99, 102, 241, 0.05); animation: pulse-border 2s infinite; }
 .activity-pending-badge { font-size: 10px; color: var(--primary); background: rgba(99, 102, 241, 0.12); padding: 1px 6px; border-radius: 8px; margin-left: 6px; }
@@ -433,70 +435,44 @@ body { scrollbar-width: none; }
 
 .file-input-label { display: block; text-align: center; cursor: pointer; padding: 6px; border-radius: var(--radius-sm); font-size: 11px; font-weight: 600; }
 
-/* NFT Content Tab */
-.content-input-row { display: flex; gap: 6px; margin-bottom: var(--space-sm); }
-.content-input-row input { flex: 1; }
-.content-load-btn { flex-shrink: 0; }
-
-.nft-collection-header {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 8px 12px; background: var(--bg-2); border: 1px solid var(--border);
-  border-radius: var(--radius-md); margin-bottom: var(--space-sm);
-}
-.nft-col-info { display: flex; flex-direction: column; gap: 2px; }
-.nft-col-name { font-size: 13px; font-weight: 600; color: var(--text); }
-.nft-col-stats { font-size: 11px; color: var(--text-dim); }
-
-.nft-grid {
-  display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
-  max-height: 320px; overflow-y: auto;
-}
-.nft-card {
+/* zkTLS Claims Tab */
+.claims-list { display: flex; flex-direction: column; gap: 8px; }
+.claim-card {
   background: var(--bg-1); border: 1px solid var(--border);
   border-radius: var(--radius-md); overflow: hidden;
   transition: border-color var(--transition), box-shadow var(--transition);
-  cursor: pointer; position: relative;
+  cursor: pointer;
 }
-.nft-card:hover { border-color: var(--border-active); box-shadow: var(--shadow-soft); }
-.nft-card:hover .nft-card-overlay { opacity: 1; }
-.nft-card-overlay {
-  position: absolute; inset: 0;
-  background: rgba(6,13,31,0.75); backdrop-filter: blur(2px);
+.claim-card:hover { border-color: var(--border-active); box-shadow: var(--shadow-soft); }
+.claim-header {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 12px 0;
+}
+.claim-favicon-wrap {
+  width: 28px; height: 28px; border-radius: var(--radius-sm);
+  background: var(--bg-2); border: 1px solid var(--border);
   display: flex; align-items: center; justify-content: center;
-  opacity: 0; transition: opacity 0.15s ease; z-index: 2;
-  border-radius: var(--radius-md);
+  flex-shrink: 0; overflow: hidden;
 }
-.nft-card-overlay-btn {
-  background: var(--accent); color: #fff; border: none;
-  padding: 8px 16px; border-radius: var(--radius-md);
-  font-size: 12px; font-weight: 600; cursor: pointer;
-  transition: background 0.15s;
+.claim-favicon { width: 20px; height: 20px; object-fit: contain; }
+.claim-favicon-placeholder { font-size: 14px; line-height: 1; }
+.claim-meta { flex: 1; display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.claim-domain { font-size: 12px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.claim-id { font-size: 10px; color: var(--text-dim); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.claim-age { font-size: 10px; color: var(--text-dim); flex-shrink: 0; }
+.claim-body {
+  display: flex; flex-direction: column; gap: 2px;
+  padding: 6px 12px;
 }
-.nft-card-overlay-btn:hover { background: #0000c4; }
-.nft-card-img-wrap {
-  width: 100%; aspect-ratio: 1; overflow: hidden;
-  background: var(--bg-2); display: flex; align-items: center; justify-content: center;
+.claim-url { font-size: 10px; color: var(--text-dim); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.claim-summary { font-size: 11px; color: var(--pos); font-weight: 500; }
+.claim-preview { font-size: 10px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.claim-footer {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 4px 12px 8px;
 }
-.nft-card-img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.nft-card-img-placeholder {
-  width: 100%; height: 100%; display: flex; align-items: center; justify-content: center;
-  font-size: 11px; color: var(--text-dim);
-}
-.nft-card-img-placeholder.no-img { background: var(--bg-3); }
-.nft-card-info { padding: 8px 10px; display: flex; flex-direction: column; gap: 2px; }
-.nft-card-name { font-size: 12px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.nft-card-desc { font-size: 10px; color: var(--text-dim); line-height: 1.3; max-height: 2.6em; overflow: hidden; text-overflow: ellipsis; }
-.nft-card-desc.loading-text { animation: shimmer 1.5s infinite ease-in-out; background: linear-gradient(90deg, var(--fg-3) 25%, var(--fg-2) 50%, var(--fg-3) 75%); background-size: 200% 100%; -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-.nft-attrs { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
-.nft-attr {
-  font-size: 9px; padding: 2px 6px; border-radius: var(--radius-sm);
-  background: var(--bg-2); border: 1px solid var(--border); color: var(--text-muted);
-}
-.nft-attr-type { color: var(--text-dim); margin-right: 2px; }
-
-.nft-empty { text-align: center; padding: var(--space-lg); color: var(--text-dim); font-size: 12px; }
-.nft-loading { text-align: center; padding: var(--space-lg); color: var(--text-dim); font-size: 12px; display: flex; flex-direction: column; align-items: center; gap: 8px; }
-.nft-loading-spinner { width: 32px; height: 32px; border-radius: 50%; }
+.claim-date { font-size: 10px; color: var(--text-dim); }
+.claim-origin { font-size: 10px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 50%; }
 
 /* Prover Recommendation Screen */
 .prover-rec-content { display: flex; flex-direction: column; align-items: center; text-align: center; padding: var(--space-lg) var(--space-md); }

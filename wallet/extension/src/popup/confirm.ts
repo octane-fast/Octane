@@ -99,6 +99,7 @@ async function load() {
       detailsEl.innerHTML = `
         <div class="row"><span class="label">Operation:</span> <span class="value">${escapeHtml(String(approval.data.operation ?? 'Prove TLS session'))}</span></div>
         ${approval.data.detail ? `<div class="row"><span class="label">Details:</span> <span class="value">${escapeHtml(String(approval.data.detail))}</span></div>` : ''}
+        ${approval.data.proofId ? `<div class="row"><span class="label">Claim ID:</span> <span class="value" style="font-family:monospace;font-size:11px">${escapeHtml(String(approval.data.proofId))}</span></div>` : ''}
       `;
       warningEl.textContent = 'This will record a TLS session and generate a zero-knowledge proof of the decryption.';
       break;

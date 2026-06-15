@@ -1,6 +1,10 @@
 /**
- * Centralized job storage API.
+ * Centralized job storage API backed by IndexedDB.
  * Encapsulates the key naming convention for job state and satellite data.
+ *
+ * Previously used chrome.storage.local (~5 MB quota). IDB gives much more
+ * headroom for satellite blobs (crypto results, params, stealth data).
+ * Core wallet info (seed, accounts, settings) stays in chrome.storage.local.
  */
 
 import {
@@ -9,6 +13,76 @@ import {
   JOB_SUFFIX_STEALTH, JOB_SUFFIX_STEALTH_PARAMS, JOB_SUFFIX_CLAIM,
   JOB_STATUS_PENDING_UNLOCK,
 } from './constants';
+
+// ─── IndexedDB Setup ────────────────────────────────────────────────────────
+
+const DB_NAME = 'octane-jobs';
+const DB_VERSION = 1;
+const STORE_NAME = 'jobs';
+
+let _db: IDBDatabase | null = null;
+
+function openDB(): Promise<IDBDatabase> {
+  if (_db) return Promise.resolve(_db);
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_NAME, DB_VERSION);
+    req.onupgradeneeded = () => {
+      req.result.createObjectStore(STORE_NAME);
+    };
+    req.onsuccess = () => { _db = req.result; resolve(req.result); };
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function idbGet(key: string): Promise<Record<string, unknown> | undefined> {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readonly');
+    const req = tx.objectStore(STORE_NAME).get(key);
+    req.onsuccess = () => resolve(req.result as Record<string, unknown> | undefined);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function idbSet(key: string, value: Record<string, unknown>): Promise<void> {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readwrite');
+    tx.objectStore(STORE_NAME).put(value, key);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+async function idbRemove(keys: string[]): Promise<void> {
+  if (keys.length === 0) return;
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readwrite');
+    const store = tx.objectStore(STORE_NAME);
+    for (const k of keys) store.delete(k);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+async function idbGetAll(): Promise<Record<string, Record<string, unknown>>> {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readonly');
+    const store = tx.objectStore(STORE_NAME);
+    const keyReq = store.getAllKeys();
+    const valReq = store.getAll();
+    tx.oncomplete = () => {
+      const keys = keyReq.result as string[];
+      const vals = valReq.result as Record<string, unknown>[];
+      const out: Record<string, Record<string, unknown>> = {};
+      keys.forEach((k, i) => { out[k] = vals[i]; });
+      resolve(out);
+    };
+    tx.onerror = () => reject(tx.error);
+  });
+}
 
 // ─── Key Builders ───────────────────────────────────────────────────────────
 
@@ -52,43 +126,37 @@ export function jobIdFromKey(key: string): string | null {
 // ─── Storage Operations ─────────────────────────────────────────────────────
 
 export async function getJob(id: string): Promise<Record<string, unknown> | null> {
-  const k = jobKey(id);
-  const result = await chrome.storage.local.get(k);
-  return (result[k] as Record<string, unknown>) ?? null;
+  return (await idbGet(jobKey(id))) ?? null;
 }
 
 export async function setJob(id: string, data: Record<string, unknown>): Promise<void> {
-  await chrome.storage.local.set({ [jobKey(id)]: data });
+  await idbSet(jobKey(id), data);
 }
 
 export async function getJobCrypto(id: string): Promise<Record<string, unknown> | null> {
-  const k = jobCryptoKey(id);
-  const result = await chrome.storage.local.get(k);
-  return (result[k] as Record<string, unknown>) ?? null;
+  return (await idbGet(jobCryptoKey(id))) ?? null;
 }
 
 export async function setJobCrypto(id: string, data: Record<string, unknown>): Promise<void> {
-  await chrome.storage.local.set({ [jobCryptoKey(id)]: data });
+  await idbSet(jobCryptoKey(id), data);
 }
 
 export async function getJobParams(id: string): Promise<Record<string, unknown> | null> {
-  const k = jobParamsKey(id);
-  const result = await chrome.storage.local.get(k);
-  return (result[k] as Record<string, unknown>) ?? null;
+  return (await idbGet(jobParamsKey(id))) ?? null;
 }
 
 export async function setJobParams(id: string, data: Record<string, unknown>): Promise<void> {
-  await chrome.storage.local.set({ [jobParamsKey(id)]: data });
+  await idbSet(jobParamsKey(id), data);
 }
 
 /** Remove the primary key and all satellite keys for a job. */
 export async function removeJob(id: string): Promise<void> {
-  await chrome.storage.local.remove(allKeysForJob(id));
+  await idbRemove(allKeysForJob(id));
 }
 
 /** Remove only satellite keys (keep primary status). */
 export async function removeSatellites(id: string): Promise<void> {
-  await chrome.storage.local.remove(satelliteKeys(id));
+  await idbRemove(satelliteKeys(id));
 }
 
 /**
@@ -104,16 +172,49 @@ export function completeJob(id: string, hash: string, cleanupDelay = JOB_DEFAULT
  * Called after the wallet is unlocked so background crypto can proceed.
  */
 export async function resumePendingUnlockJobs(): Promise<void> {
-  // Legacy: old offscreen-path jobs wrote pending_unlock status.
-  // New jobs never enter this state. Just clean them up.
-  const all = await chrome.storage.local.get(null) as Record<string, { status?: string }>;
+  const all = await idbGetAll();
   const toRemove: string[] = [];
-  for (const key of Object.keys(all)) {
+  for (const [key, value] of Object.entries(all)) {
     if (!isStatusKey(key)) continue;
-    if (all[key]?.status === JOB_STATUS_PENDING_UNLOCK) {
+    if ((value as { status?: string })?.status === JOB_STATUS_PENDING_UNLOCK) {
       const id = jobIdFromKey(key);
       if (id) toRemove.push(...allKeysForJob(id));
     }
   }
-  if (toRemove.length) chrome.storage.local.remove(toRemove);
+  if (toRemove.length) await idbRemove(toRemove);
+}
+
+/**
+ * Touch a job key in IDB (keep-alive signal for the service worker).
+ */
+export async function touchJob(id: string): Promise<void> {
+  await idbGet(jobKey(id));
+}
+
+/**
+ * Purge stale jobs from IDB on service worker startup.
+ * Removes terminal-state jobs, legacy states, and stale running jobs from dead SWs.
+ */
+export async function cleanupStaleJobs(): Promise<void> {
+  const { JOB_STATUS_DONE, JOB_STATUS_ERROR, JOB_STATUS_CANCELLED,
+    JOB_STATUS_CRYPTO_DONE, JOB_STATUS_RUNNING } = await import('./constants');
+
+  const all = await idbGetAll();
+  const keysToRemove: string[] = [];
+
+  for (const [key, value] of Object.entries(all)) {
+    if (!isStatusKey(key)) continue;
+    const jobId = jobIdFromKey(key);
+    if (!jobId) continue;
+    const status = (value as { status?: string })?.status;
+    if (!status) continue;
+
+    if (status === JOB_STATUS_DONE || status === JOB_STATUS_ERROR || status === JOB_STATUS_CANCELLED
+      || status === JOB_STATUS_CRYPTO_DONE || status === JOB_STATUS_PENDING_UNLOCK
+      || status === JOB_STATUS_RUNNING) {
+      keysToRemove.push(...allKeysForJob(jobId));
+    }
+  }
+
+  if (keysToRemove.length > 0) await idbRemove(keysToRemove);
 }

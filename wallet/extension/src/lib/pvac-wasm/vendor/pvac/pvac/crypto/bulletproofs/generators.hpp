@@ -3,11 +3,15 @@
 #include <cstdint>
 #include <vector>
 #include <mutex>
+#include <limits>
+#include <stdexcept>
 #include "../../core/hash.hpp"
 #include "../ristretto255.hpp"
 
 namespace pvac {
 namespace bp {
+
+inline constexpr size_t BP_MAX_VECTOR_SIZE = static_cast<size_t>(1) << 20;
 
 inline RistrettoPoint hash_to_ristretto_point(const char* domain, uint64_t index) {
 
@@ -60,16 +64,24 @@ class GeneratorTable {
     mutable std::vector<RistrettoPoint> H_;
     mutable std::mutex mtx_;
 
-    void ensure_size(size_t n) const {
-        if (G_.size() >= n) return;
-        size_t old = G_.size();
-        G_.resize(n);
-        H_.resize(n);
-        for (size_t i = old; i < n; i++) {
-            G_[i] = hash_to_ristretto_point("pvac.bp.gen.G", i);
-            H_[i] = hash_to_ristretto_point("pvac.bp.gen.H", i);
+        void ensure_size(size_t n) const {
+            if (n > BP_MAX_VECTOR_SIZE)
+                throw std::runtime_error("pvac: generator size rejected");
+            if (G_.size() != H_.size())
+                throw std::runtime_error("pvac: generator table shape rejected");
+            if (G_.size() >= n) return;
+            size_t old = G_.size();
+            auto next_G = G_;
+            auto next_H = H_;
+            next_G.resize(n);
+            next_H.resize(n);
+            for (size_t i = old; i < n; i++) {
+                next_G[i] = hash_to_ristretto_point("pvac.bp.gen.G", i);
+                next_H[i] = hash_to_ristretto_point("pvac.bp.gen.H", i);
+            }
+            G_.swap(next_G);
+            H_.swap(next_H);
         }
-    }
 
 public:
     GeneratorTable() = default;
@@ -121,19 +133,20 @@ inline const RistrettoPoint& pedersen_B_blinding() {
 
 inline size_t next_power_of_2(size_t n) {
     if (n == 0) return 1;
-    n--;
-    n |= n >> 1;
-    n |= n >> 2;
-    n |= n >> 4;
-    n |= n >> 8;
-    n |= n >> 16;
-#if SIZE_MAX > 0xFFFFFFFFUL
-    n |= n >> 32;
-#endif
-    return n + 1;
+    if (n > BP_MAX_VECTOR_SIZE)
+        throw std::runtime_error("pvac: vector size rejected");
+    size_t out = 1;
+    while (out < n) {
+        if (out > BP_MAX_VECTOR_SIZE / 2)
+            throw std::runtime_error("pvac: vector size overflow");
+        out <<= 1;
+    }
+    return out;
 }
 
 inline size_t log2_size(size_t n) {
+    if (n == 0 || n > BP_MAX_VECTOR_SIZE || (n & (n - 1)))
+        throw std::runtime_error("pvac: log2 size rejected");
     size_t r = 0;
     while ((1ULL << r) < n) r++;
     return r;

@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <cstring>
 #include <array>
+#include <stdexcept>
 #include "../core/hash.hpp"
 #include "../core/field.hpp"
 
@@ -236,6 +237,14 @@ inline Scalar sc_from_bytes(const uint8_t s[32]) {
             r.v[i] |= (uint64_t)s[i*8+j] << (j*8);
     }
     return r;
+}
+
+inline bool sc_is_canonical(const Scalar& a) {
+    for (int i = 3; i >= 0; --i) {
+        if (a.v[i] < SC_L[i]) return true;
+        if (a.v[i] > SC_L[i]) return false;
+    }
+    return false;
 }
 
 inline void sc_tobytes(uint8_t s[32], const Scalar& a) {
@@ -655,23 +664,27 @@ inline bool rist_decode(ExtPoint& P, const RistrettoPoint& bytes) {
     return true;
 }
 
+inline ExtPoint rist_decode_or_throw(const RistrettoPoint& bytes) {
+    ExtPoint P;
+    if (!rist_decode(P, bytes))
+        throw std::runtime_error("pvac: invalid Ristretto point encoding");
+    return P;
+}
+
 inline RistrettoPoint rist_add(const RistrettoPoint& a, const RistrettoPoint& b) {
-    ExtPoint P, Q;
-    rist_decode(P, a);
-    rist_decode(Q, b);
+    ExtPoint P = rist_decode_or_throw(a);
+    ExtPoint Q = rist_decode_or_throw(b);
     return rist_encode(ext_add(P, Q));
 }
 
 inline RistrettoPoint rist_sub(const RistrettoPoint& a, const RistrettoPoint& b) {
-    ExtPoint P, Q;
-    rist_decode(P, a);
-    rist_decode(Q, b);
+    ExtPoint P = rist_decode_or_throw(a);
+    ExtPoint Q = rist_decode_or_throw(b);
     return rist_encode(ext_sub(P, Q));
 }
 
 inline RistrettoPoint rist_scalarmul(const RistrettoPoint& pt, const Scalar& s) {
-    ExtPoint P;
-    rist_decode(P, pt);
+    ExtPoint P = rist_decode_or_throw(pt);
     return rist_encode(ext_scalarmul(P, s));
 }
 
@@ -743,8 +756,10 @@ inline RistrettoPoint pedersen_commit(const Scalar& value, const Scalar& blindin
     ExtPoint G_pt, H_pt;
     RistrettoPoint G_enc = rist_G();
     RistrettoPoint H_enc = rist_H();
-    rist_decode(G_pt, G_enc);
-    rist_decode(H_pt, H_enc);
+    if (!rist_decode(G_pt, G_enc))
+        throw std::runtime_error("pvac: invalid Pedersen G generator");
+    if (!rist_decode(H_pt, H_enc))
+        throw std::runtime_error("pvac: invalid Pedersen H generator");
 
     ExtPoint vG = ext_scalarmul(G_pt, value);
     ExtPoint bH = ext_scalarmul(H_pt, blinding);

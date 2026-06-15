@@ -9,6 +9,7 @@
 #include <numeric>
 #include <algorithm>
 #include <functional>
+#include <cstring>
 #include <type_traits>
 
 #include "../core/types.hpp"
@@ -973,9 +974,39 @@ inline Cipher enc_fp_depth_seeded(const PubKey& pk, const SecKey& sk, const std:
     return core::synth_seeded(pk, sk, v, d, rng);
 }
 
+inline void seed_mix_u64(Sha256& h, uint64_t x) {
+    uint8_t b[8];
+    for (int i = 0; i < 8; ++i) b[7 - i] = static_cast<uint8_t>(x >> (i * 8));
+    h.update(b, sizeof(b));
+}
+
+inline void seed_mix_fp(Sha256& h, const Fp& x) {
+    seed_mix_u64(h, x.lo);
+    seed_mix_u64(h, x.hi);
+}
+
+inline std::array<uint8_t, 32> enc_seed_scope(const PubKey& pk, const uint8_t seed[32], const char* op, uint64_t slots, int depth, const std::vector<Fp>& values) {
+    Sha256 h;
+    h.init();
+    const char dom[] = "pvac.enc.seed.v2";
+    h.update(dom, sizeof(dom) - 1);
+    h.update(seed, 32);
+    seed_mix_u64(h, pk.canon_tag);
+    h.update(pk.H_digest.data(), pk.H_digest.size());
+    h.update(op, std::strlen(op));
+    seed_mix_u64(h, slots);
+    seed_mix_u64(h, static_cast<uint64_t>(static_cast<int64_t>(depth)));
+    seed_mix_u64(h, values.size());
+    for (const auto& value : values) seed_mix_fp(h, value);
+    std::array<uint8_t, 32> out{};
+    h.finish(out.data());
+    return out;
+}
+
 inline Cipher enc_value_seeded(const PubKey& pk, const SecKey& sk, uint64_t v, const uint8_t seed[32]) {
-    SeedableRng rng = make_seeded_rng(seed);
     std::vector<Fp> vals = {fp_from_u64(v)};
+    auto scoped = enc_seed_scope(pk, seed, "value", vals.size(), 0, vals);
+    SeedableRng rng = make_seeded_rng(scoped.data());
     std::vector<Fp> m = {rng.fp_nonzero()};
     return combine_ciphers(pk,
         enc_fp_depth_seeded(pk, sk, field::Op::add(vals, m), 0, rng),
@@ -983,8 +1014,9 @@ inline Cipher enc_value_seeded(const PubKey& pk, const SecKey& sk, uint64_t v, c
 }
 
 inline Cipher enc_value_depth_seeded(const PubKey& pk, const SecKey& sk, uint64_t v, int d, const uint8_t seed[32]) {
-    SeedableRng rng = make_seeded_rng(seed);
     std::vector<Fp> vals = {fp_from_u64(v)};
+    auto scoped = enc_seed_scope(pk, seed, "value_depth", vals.size(), d, vals);
+    SeedableRng rng = make_seeded_rng(scoped.data());
     std::vector<Fp> m = {rng.fp_nonzero()};
     return combine_ciphers(pk,
         enc_fp_depth_seeded(pk, sk, field::Op::add(vals, m), d, rng),
@@ -992,17 +1024,21 @@ inline Cipher enc_value_depth_seeded(const PubKey& pk, const SecKey& sk, uint64_
 }
 
 inline Cipher enc_values_seeded(const PubKey& pk, const SecKey& sk, const std::vector<uint64_t>& v, const uint8_t seed[32]) {
-    SeedableRng rng = make_seeded_rng(seed);
     size_t S = v.size();
     std::vector<Fp> vals(S), m(S);
-    for (size_t j = 0; j < S; ++j) { vals[j] = fp_from_u64(v[j]); m[j] = rng.fp_nonzero(); }
+    for (size_t j = 0; j < S; ++j) vals[j] = fp_from_u64(v[j]);
+    auto scoped = enc_seed_scope(pk, seed, "values", vals.size(), 0, vals);
+    SeedableRng rng = make_seeded_rng(scoped.data());
+    for (size_t j = 0; j < S; ++j) m[j] = rng.fp_nonzero();
     return combine_ciphers(pk,
         enc_fp_depth_seeded(pk, sk, field::Op::add(vals, m), 0, rng),
         enc_fp_depth_seeded(pk, sk, field::Op::neg(m), 0, rng));
 }
 
 inline Cipher enc_zero_seeded(const PubKey& pk, const SecKey& sk, const uint8_t seed[32]) {
-    SeedableRng rng = make_seeded_rng(seed);
+    std::vector<Fp> vals = {field::Op::zero()};
+    auto scoped = enc_seed_scope(pk, seed, "zero", vals.size(), 0, vals);
+    SeedableRng rng = make_seeded_rng(scoped.data());
     std::vector<Fp> m = {rng.fp_nonzero()};
     return combine_ciphers(pk,
         enc_fp_depth_seeded(pk, sk, m, 0, rng),

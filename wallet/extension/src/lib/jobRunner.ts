@@ -65,13 +65,12 @@ const DEFAULT_RETRY_DELAY = 5000;
 // ─── Job Runner ─────────────────────────────────────────────────────────────
 
 function makeContext(jobId: string, attempt: number): JobContext {
-  const storageKey = `job_${jobId}`;
   return {
     jobId,
-    storageKey,
+    storageKey: `job_${jobId}`,
     attempt,
     async update(fields: Record<string, unknown>) {
-      await chrome.storage.local.set({ [storageKey]: { status: 'running', ...fields } });
+      await setJob(jobId, { status: 'running', ...fields });
     },
     async isCancelled() {
       const data = await getJob(jobId);
@@ -129,8 +128,6 @@ export async function submitWithRetry(
   attempt: number,
   retryDelay = DEFAULT_RETRY_DELAY,
 ): Promise<void> {
-  const storageKey = `job_${jobId}`;
-
   try {
     if (!vault.isUnlocked()) throw new Error('locked');
 
@@ -146,7 +143,7 @@ export async function submitWithRetry(
     const stepMsg = attempt > 0
       ? `Submitting transaction... (retry ${attempt})`
       : 'Submitting transaction...';
-    await chrome.storage.local.set({ [storageKey]: { status: 'running', step: stepMsg, attempt } });
+    await setJob(jobId, { status: 'running', step: stepMsg, attempt });
 
     const address = vault.getAddress();
     const balInfo = await rpc.getBalance(address);
@@ -173,9 +170,7 @@ export async function submitWithRetry(
       await setJob(jobId, { status: 'error', error: msg });
     } else {
       const nextAttempt = attempt + 1;
-      await chrome.storage.local.set({
-        [storageKey]: { status: 'running', step: `Submitting transaction... (retry ${nextAttempt} — ${msg})`, attempt: nextAttempt },
-      });
+      await setJob(jobId, { status: 'running', step: `Submitting transaction... (retry ${nextAttempt} — ${msg})`, attempt: nextAttempt });
       setTimeout(() => submitWithRetry(jobId, config, nextAttempt, retryDelay), retryDelay);
     }
   }

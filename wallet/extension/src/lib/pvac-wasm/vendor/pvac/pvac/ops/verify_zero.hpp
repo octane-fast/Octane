@@ -18,6 +18,12 @@ inline std::vector<std::vector<Fp>> compute_layer_coeffs(
     std::vector<std::vector<Fp>> A(nL, std::vector<Fp>(S, Fp{0,0}));
 
     for (const auto& e : ct.E) {
+        if (e.layer_id >= nL)
+            throw std::runtime_error("pvac: edge layer out of range");
+        if (e.idx >= pk.powg_B.size())
+            throw std::runtime_error("pvac: edge public-key index out of range");
+        if (e.w.size() != S)
+            throw std::runtime_error("pvac: edge weight/slots size mismatch");
         Fp gp = pk.powg_B[e.idx];
         int sg = sgn_val(e.ch);
         for (size_t j = 0; j < S; j++) {
