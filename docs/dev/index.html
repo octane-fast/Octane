@@ -360,7 +360,11 @@
       } catch (e) {
         status.textContent = '❌ Failed';
         status.style.color = '#f87171';
-        showResult('zktls-result', e.message, true);
+        let errMsg = e.message || String(e);
+        if (/no prover/i.test(errMsg) || /not connected/i.test(errMsg) || /accelerator/i.test(errMsg)) {
+          errMsg += '\n\n💡 Download the Octane Accelerator for local zkTLS proving:\nhttps://github.com/octane-fast/octane-accelerator/releases/latest';
+        }
+        showResult('zktls-result', errMsg, true);
       } finally {
         btn.disabled = false;
         btn.textContent = 'Prove TLS Session';
