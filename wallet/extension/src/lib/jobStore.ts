@@ -12,6 +12,8 @@ import {
   JOB_SUFFIX_CRYPTO, JOB_SUFFIX_PARAMS,
   JOB_SUFFIX_STEALTH, JOB_SUFFIX_STEALTH_PARAMS, JOB_SUFFIX_CLAIM,
   JOB_STATUS_PENDING_UNLOCK,
+  JOB_STATUS_DONE, JOB_STATUS_ERROR, JOB_STATUS_CANCELLED,
+  JOB_STATUS_CRYPTO_DONE, JOB_STATUS_RUNNING,
 } from './constants';
 
 // ─── IndexedDB Setup ────────────────────────────────────────────────────────
@@ -196,9 +198,6 @@ export async function touchJob(id: string): Promise<void> {
  * Removes terminal-state jobs, legacy states, and stale running jobs from dead SWs.
  */
 export async function cleanupStaleJobs(): Promise<void> {
-  const { JOB_STATUS_DONE, JOB_STATUS_ERROR, JOB_STATUS_CANCELLED,
-    JOB_STATUS_CRYPTO_DONE, JOB_STATUS_RUNNING } = await import('./constants');
-
   const all = await idbGetAll();
   const keysToRemove: string[] = [];
 
