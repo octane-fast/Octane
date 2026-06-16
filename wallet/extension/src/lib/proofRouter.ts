@@ -54,19 +54,25 @@ export function invalidateProverCache(): void {
 export async function isProverAvailable(): Promise<boolean> {
   const now = Date.now();
   if (proverAvailableCache !== null && now < proverCacheExpiry) {
+    console.log('[proofRouter] prover cache hit:', proverAvailableCache);
     return proverAvailableCache;
   }
   try {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 2000);
+    console.log('[proofRouter] checking prover at', PROVER_URL);
     const res = await fetch(`${PROVER_URL}/health`, { signal: ctrl.signal });
     clearTimeout(timer);
+    console.log('[proofRouter] health response status:', res.status);
     const data = await res.json();
+    console.log('[proofRouter] health data:', data);
     const available = data.status === 'ready';
     proverAvailableCache = available;
     proverCacheExpiry = now + (available ? PROVER_CACHE_TTL_OK : PROVER_CACHE_TTL_FAIL);
+    console.log('[proofRouter] prover available:', available);
     return available;
-  } catch {
+  } catch (e) {
+    console.warn('[proofRouter] prover check failed:', e);
     proverAvailableCache = false;
     proverCacheExpiry = now + PROVER_CACHE_TTL_FAIL;
     return false;
@@ -151,15 +157,15 @@ export function runNativeProver(jobId: string, payload: Record<string, string>):
       }
     };
 
-    // Timeout: if no result after 120s, give up (heavy proofs can take a while)
+    // Timeout: if no result after 10min, give up (zkTLS proofs with multiple records can take 5+ min)
     setTimeout(() => {
       if (!settled) {
         settled = true;
         cleanup();
         ws.close();
-        reject(new Error('Native prover timeout (120s)'));
+        reject(new Error('Native prover timeout (600s)'));
       }
-    }, 120_000);
+    }, 600_000);
   });
 }
 
@@ -245,9 +251,12 @@ export function runRemoteProver(jobId: string, payload: Record<string, string>, 
  */
 export async function route(opts: RouteOpts): Promise<Record<string, unknown> | null> {
   const { operation, payload, jobId, wasm, onStatus } = opts;
+  console.log('[proofRouter] route() called for', operation);
 
   // 1) Native desktop prover
-  if (await isProverAvailable()) {
+  const nativeAvail = await isProverAvailable();
+  console.log('[proofRouter] native prover available:', nativeAvail);
+  if (nativeAvail) {
     onStatus?.('Proving ⚡ Desktop', 'local');
     try {
       if (opts.native) {
