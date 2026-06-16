@@ -239,6 +239,10 @@
       <a class="sidebar-link" href="#networkInfo">octra_getNetworkInfo</a>
     </div>
     <div class="sidebar-section">
+      <div class="sidebar-section-title">zkTLS</div>
+      <a class="sidebar-link" href="#zktls_prove">octra_requestZktlsProofJolt</a>
+    </div>
+    <div class="sidebar-section">
       <div class="sidebar-section-title">Examples</div>
       <a class="sidebar-link" href="/dev/" target="_blank">PVAC Proof Demo ↗</a>
     </div>
@@ -713,6 +717,43 @@ console.log(accounts[<span class="number">0</span>]); <span class="comment">// "
       <tr><td>chainId</td><td><code>string</code></td><td>Chain identifier</td></tr>
       <tr><td>rpcUrl</td><td><code>string</code></td><td>Current RPC endpoint URL</td></tr>
     </table>
+
+    <!-- zkTLS -->
+    <h2>zkTLS</h2>
+    <p>zkTLS lets DApps generate zero-knowledge proofs of TLS sessions. The wallet records a TLS handshake and the Octane Accelerator (Jolt zkVM) proves it locally — no data leaves the user's machine. Requires the <a href="https://github.com/octane-fast/octane-accelerator/releases/latest" target="_blank">Octane Accelerator</a> to be running.</p>
+
+    <h3 id="zktls_prove">octra_requestZktlsProofJolt</h3>
+    <p>Records a TLS session to the given URL and generates a zero-knowledge proof of the response using Jolt. Proofs are cached by ID — subsequent calls with the same ID return instantly.</p>
+    <pre><code><span class="keyword">const</span> result = <span class="keyword">await</span> window.octra.request({
+  method: <span class="string">'octra_requestZktlsProofJolt'</span>,
+  params: [{
+    url: <span class="string">'https://api.github.com/zen'</span>,
+    headers: { Accept: <span class="string">'application/json'</span> },
+    id: <span class="string">'github-zen-proof'</span>,
+    records: [<span class="number">0</span>, <span class="number">1</span>],
+  }],
+});
+<span class="comment">// { proof, public_inputs, url, status, _cached?, _cacheAge? }</span></code></pre>
+    <table class="params">
+      <tr><th>Param</th><th>Type</th><th>Description</th></tr>
+      <tr><td>url <span class="required">required</span></td><td><code>string</code></td><td>URL to fetch and prove</td></tr>
+      <tr><td>headers</td><td><code>object</code></td><td>Custom HTTP headers (JSON object)</td></tr>
+      <tr><td>id</td><td><code>string</code></td><td>Unique claim ID for caching. Same ID + URL returns cached proof.</td></tr>
+      <tr><td>records</td><td><code>number[]</code></td><td>TLS record indices to include in the proof (default: all)</td></tr>
+      <tr><td>regenerate</td><td><code>boolean</code></td><td>Force regeneration, skip cache</td></tr>
+    </table>
+    <table class="params">
+      <tr><th>Returns</th><th>Type</th><th>Description</th></tr>
+      <tr><td>proof</td><td><code>string</code></td><td>Base64-encoded Jolt proof blob</td></tr>
+      <tr><td>public_inputs</td><td><code>object</code></td><td>Public inputs (URL hash, response digest, record metadata)</td></tr>
+      <tr><td>url</td><td><code>string</code></td><td>The proven URL</td></tr>
+      <tr><td>status</td><td><code>string</code></td><td>Proof status (<code>"verified"</code> or <code>"error"</code>)</td></tr>
+      <tr><td>_cached</td><td><code>boolean</code></td><td>True if this was a cached proof</td></tr>
+      <tr><td>_cacheAge</td><td><code>number</code></td><td>Age of cached proof in seconds</td></tr>
+    </table>
+    <p style="margin-top:20px; padding: 14px 18px; background: rgba(99,102,241,0.08); border: 1px solid rgba(99,102,241,0.2); border-radius: 8px; font-size: 0.9rem;">
+      💡 <strong>Try it live:</strong> <a href="/dev/">Open the Demo App →</a> — section 11 exercises the full zkTLS flow interactively.
+    </p>
   </div>
 
   <script>
