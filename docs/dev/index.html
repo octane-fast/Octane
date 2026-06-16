@@ -343,7 +343,7 @@
       btn.textContent = 'Proving…';
       status.textContent = '⏳ Recording TLS session and generating proof (~90s)…';
       status.style.color = '#facc15';
-      showResult('zktls-result', 'Recording TLS session, then proving with Jolt zkVM…\nThis takes ~90 seconds for 3 handshake records.\n', false);
+      showResult('zktls-result', 'Recording TLS session, then making a proof..\nThis takes ~90 seconds for 3 session records.\n', false);
       try {
         const start = Date.now();
         const params = { url, headers, id, regenerate, records };

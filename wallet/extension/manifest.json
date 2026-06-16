@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Octane Wallet",
-  "version": "2.5.1",
+  "version": "2.5.2",
   "description": "Wallet for the Octra network",
   "permissions": ["storage", "offscreen", "proxy"],
   "host_permissions": ["http://127.0.0.1:19876/*"],

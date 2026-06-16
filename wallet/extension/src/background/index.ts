@@ -1252,6 +1252,7 @@ const handler: MessageHandler = (message, _sender, sendResponse) => {
                       operation: 'jolt_zktls_prove',
                       url: zktlsParams.url,
                       headers: JSON.stringify(zktlsParams.headers ?? {}),
+                      ...(zktlsParams.records && zktlsParams.records.length > 0 ? { records: zktlsParams.records } : {}),
                     },
                     onStatus: (step) => {
                       console.log('[zktls] %s', step);
