@@ -4,6 +4,7 @@
   "version": "2.5.0",
   "description": "Wallet for the Octra network",
   "permissions": ["storage", "offscreen", "proxy"],
+  "host_permissions": ["http://127.0.0.1:19876/*"],
   "content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
   },
